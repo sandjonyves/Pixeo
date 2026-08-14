@@ -10,6 +10,13 @@ import {
   type ReactNode,
 } from 'react'
 import { STOCK_PHOTOS, createSeedState, formatBytes, slugify, uid } from '@/lib/seed'
+import {
+  DEFAULT_PLANS,
+  effectiveGalleryLimit,
+  getPlan,
+  type PlanDefinition,
+  type PlanId,
+} from '@/lib/plans'
 import type {
   AppState,
   BrandingSettings,
@@ -28,16 +35,31 @@ import type {
 
 const STORAGE_KEY = 'client-gallery-app-v5'
 
+type LimitCheck = { ok: boolean; error?: string }
+
 type GalleryContextValue = {
   ready: boolean
   state: AppState
   isAuthenticated: boolean
+  isAdmin: boolean
   usedStorageBytes: number
   usedStorageLabel: string
   login: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>
-  register: (name: string, email: string, password: string) => Promise<{ ok: boolean; error?: string }>
+  register: (name: string, email: string, password: string, planId?: PlanId) => Promise<{ ok: boolean; error?: string }>
   logout: () => void
   updateUser: (patch: Partial<UserAccount>) => void
+  changePlan: (planId: PlanId) => void
+  updatePlans: (plans: PlanDefinition[]) => void
+  updateAccount: (id: string, patch: Partial<UserAccount>) => void
+  createPlatformAccount: (input: {
+    name: string
+    email: string
+    password: string
+    role: 'photographer' | 'platform_admin'
+    planId?: PlanId
+  }) => { ok: boolean; error?: string; account?: UserAccount }
+  canCreateGallery: () => LimitCheck
+  canUploadBytes: (bytes: number) => LimitCheck
   createCollection: (input?: { name?: string; eventDate?: string }) => Collection
   updateCollection: (id: string, patch: Partial<Collection>) => void
   deleteCollection: (id: string) => void
@@ -108,6 +130,9 @@ function loadState(): AppState {
       presets: parsed.presets?.length ? parsed.presets : seed.presets,
       homepage: { ...seed.homepage, ...parsed.homepage },
       branding: { ...seed.branding, ...parsed.branding },
+      accounts: parsed.accounts?.length ? parsed.accounts : seed.accounts,
+      plans: parsed.plans?.length ? parsed.plans : seed.plans,
+      billingHistory: parsed.billingHistory ?? seed.billingHistory,
       collections: (parsed.collections ?? seed.collections).map((c) => ({
         ...seed.collections[0],
         ...c,
@@ -188,23 +213,21 @@ export function GalleryProvider({ children }: { children: ReactNode }) {
     }
     let result: { ok: boolean; error?: string } = { ok: false, error: 'Invalid credentials.' }
     setState((prev) => {
+      const account = prev.accounts.find(
+        (a) => a.email.toLowerCase() === normalized && a.password === password,
+      )
+      if (account) {
+        if (account.status === 'suspended') {
+          result = { ok: false, error: 'This account has been suspended.' }
+          return prev
+        }
+        result = { ok: true }
+        const plan = getPlan(account.planId, prev.plans)
+        return { ...prev, user: account, storageLimitBytes: plan.storageLimitBytes }
+      }
       if (prev.user && prev.user.email.toLowerCase() === normalized && prev.user.password === password) {
         result = { ok: true }
         return prev
-      }
-      // Allow demo credentials even if user wiped email
-      if (normalized === 'demo@simpleshoot.com' && password === 'demo1234') {
-        result = { ok: true }
-        return {
-          ...prev,
-          user: prev.user ?? {
-            id: 'user_demo',
-            name: 'Simple Shoot',
-            email: 'demo@simpleshoot.com',
-            password: 'demo1234',
-            initials: 'S',
-          },
-        }
       }
       return prev
     })
@@ -212,36 +235,47 @@ export function GalleryProvider({ children }: { children: ReactNode }) {
     return result
   }, [])
 
-  const register = useCallback(async (name: string, email: string, password: string) => {
+  const register = useCallback(async (name: string, email: string, password: string, planId: PlanId = 'free') => {
     const normalized = email.trim().toLowerCase()
     if (!name.trim() || !normalized || password.length < 6) {
       return { ok: false, error: 'Name, email and password (6+ chars) are required.' }
     }
     await new Promise((r) => setTimeout(r, 500))
-    setState((prev) => ({
-      ...prev,
-      user: {
+    const plan = getPlan(planId, DEFAULT_PLANS)
+    const now = new Date().toISOString()
+    setState((prev) => {
+      const user: UserAccount = {
         id: uid('user'),
         name: name.trim(),
         email: normalized,
         password,
         initials: name.trim().slice(0, 1).toUpperCase(),
-      },
-      homepage: { ...prev.homepage, brandName: name.trim().toUpperCase() },
-      branding: {
-        ...prev.branding,
-        username: slugify(name).replace(/-/g, '') || 'studio',
-      },
-      notifications: [
-        {
-          id: uid('n'),
-          message: 'Account created — start with your first collection',
-          read: false,
-          createdAt: new Date().toISOString(),
+        planId,
+        role: 'photographer',
+        status: 'active',
+        createdAt: now,
+      }
+      return {
+        ...prev,
+        user,
+        accounts: [...prev.accounts, user],
+        storageLimitBytes: plan.storageLimitBytes,
+        homepage: { ...prev.homepage, brandName: name.trim().toUpperCase() },
+        branding: {
+          ...prev.branding,
+          username: slugify(name).replace(/-/g, '') || 'studio',
         },
-        ...prev.notifications,
-      ],
-    }))
+        notifications: [
+          {
+            id: uid('n'),
+            message: 'Account created — start with your first collection',
+            read: false,
+            createdAt: now,
+          },
+          ...prev.notifications,
+        ],
+      }
+    })
     return { ok: true }
   }, [])
 
@@ -273,8 +307,8 @@ export function GalleryProvider({ children }: { children: ReactNode }) {
   )
 
   const registerWithSession: typeof register = useCallback(
-    async (name, email, password) => {
-      const res = await register(name, email, password)
+    async (name, email, password, planId) => {
+      const res = await register(name, email, password, planId)
       if (res.ok) {
         window.sessionStorage.setItem('gallery-session', '1')
         setSessionActive(true)
@@ -291,18 +325,132 @@ export function GalleryProvider({ children }: { children: ReactNode }) {
 
   const value = useMemo<GalleryContextValue>(() => {
     const isAuthenticated = Boolean(state.user) && sessionActive
+    const isAdmin = state.user?.role === 'platform_admin'
+
+    const changePlan = (planId: PlanId) => {
+      const plan = getPlan(planId, state.plans)
+      commit((prev) => {
+        if (!prev.user) return prev
+        const updatedUser = { ...prev.user, planId }
+        return {
+          ...prev,
+          user: updatedUser,
+          storageLimitBytes: plan.storageLimitBytes,
+          accounts: prev.accounts.map((a) => (a.id === updatedUser.id ? updatedUser : a)),
+          billingHistory: [
+            {
+              id: uid('bill'),
+              label: `${plan.name} plan — monthly`,
+              amountFcfa: plan.priceMonthlyFcfa,
+              createdAt: new Date().toISOString(),
+              status: 'paid' as const,
+            },
+            ...prev.billingHistory,
+          ],
+        }
+      })
+    }
+
+    const updatePlans = (plans: PlanDefinition[]) => {
+      commit((prev) => ({ ...prev, plans }))
+    }
+
+    const updateAccount = (id: string, patch: Partial<UserAccount>) => {
+      commit((prev) => ({
+        ...prev,
+        accounts: prev.accounts.map((a) => (a.id === id ? { ...a, ...patch } : a)),
+        user: prev.user?.id === id ? { ...prev.user, ...patch } : prev.user,
+      }))
+    }
+
+    const createPlatformAccount = (input: {
+      name: string
+      email: string
+      password: string
+      role: 'photographer' | 'platform_admin'
+      planId?: PlanId
+    }): { ok: boolean; error?: string; account?: UserAccount } => {
+      const name = input.name.trim()
+      const email = input.email.trim().toLowerCase()
+      const password = input.password
+      if (!name || !email || password.length < 6) {
+        return { ok: false, error: 'Name, email and password (6+ chars) are required.' }
+      }
+      if (state.accounts.some((a) => a.email.toLowerCase() === email)) {
+        return { ok: false, error: 'An account with this email already exists.' }
+      }
+      const now = new Date().toISOString()
+      const planId = input.role === 'platform_admin' ? 'studio' : input.planId || 'free'
+      const account: UserAccount = {
+        id: uid('user'),
+        name,
+        email,
+        password,
+        initials: name.slice(0, 1).toUpperCase(),
+        planId,
+        role: input.role,
+        status: 'active',
+        createdAt: now,
+      }
+      commit((prev) => ({
+        ...prev,
+        accounts: [account, ...prev.accounts],
+        notifications: [
+          {
+            id: uid('n'),
+            message: `${input.role === 'platform_admin' ? 'Admin' : 'Photographer'} “${name}” created`,
+            read: false,
+            createdAt: now,
+          },
+          ...prev.notifications,
+        ],
+      }))
+      return { ok: true, account }
+    }
+
+    const canCreateGallery = (): LimitCheck => {
+      if (!state.user) return { ok: false, error: 'Sign in to create galleries.' }
+      const plan = getPlan(state.user.planId, state.plans)
+      const limit = effectiveGalleryLimit(plan)
+      if (state.collections.length >= limit) {
+        return { ok: false, error: `Gallery limit reached (${limit}). Upgrade your plan.` }
+      }
+      return { ok: true }
+    }
+
+    const canUploadBytes = (bytes: number): LimitCheck => {
+      if (usedStorageBytes + bytes > state.storageLimitBytes) {
+        return { ok: false, error: 'Storage limit exceeded. Upgrade your plan.' }
+      }
+      return { ok: true }
+    }
 
     return {
       ready,
       state,
       isAuthenticated,
+      isAdmin,
       usedStorageBytes,
       usedStorageLabel: `${formatBytes(usedStorageBytes)} of ${formatBytes(state.storageLimitBytes)} used`,
       login: loginWithSession,
       register: registerWithSession,
       logout: logoutWithSession,
+      changePlan,
+      updatePlans,
+      updateAccount,
+      createPlatformAccount,
+      canCreateGallery,
+      canUploadBytes,
       updateUser: (patch) =>
-        commit((prev) => (prev.user ? { ...prev, user: { ...prev.user, ...patch } } : prev)),
+        commit((prev) => {
+          if (!prev.user) return prev
+          const user = { ...prev.user, ...patch }
+          return {
+            ...prev,
+            user,
+            accounts: prev.accounts.map((a) => (a.id === user.id ? user : a)),
+          }
+        }),
       createCollection: (input) => {
         const name = input?.name?.trim() || 'Untitled Collection'
         const now = new Date().toISOString()

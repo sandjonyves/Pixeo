@@ -1,7 +1,7 @@
 import {
+  CreditCard,
   Image as ImageIcon,
   LayoutGrid,
-  Mail,
   Settings as SettingsIcon,
   Star,
   type LucideIcon,
@@ -13,7 +13,7 @@ export type DashboardRoute =
   | 'starred'
   | 'homepage'
   | 'settings'
-  | 'campaigns'
+  | 'billing'
 
 export const mainNav: {
   label: string
@@ -28,4 +28,16 @@ export const mainNav: {
   { label: 'Settings', icon: SettingsIcon, href: '/settings', route: 'settings' },
 ]
 
+/** Full studio sidebar including billing */
+export const studioNav: {
+  label: string
+  icon: LucideIcon
+  href: `/${DashboardRoute}`
+  route: DashboardRoute
+}[] = [
+  ...mainNav,
+  { label: 'Billing', icon: CreditCard, href: '/billing', route: 'billing' },
+]
+
+/** Optional marketing tools — not part of primary studio nav */
 export const marketingHref = '/campaigns'

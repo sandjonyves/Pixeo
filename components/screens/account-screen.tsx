@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation'
 import { AppButton } from '@/components/app-button'
 import { useGallery } from '@/lib/gallery-context'
 import { useToast } from '@/components/toast-provider'
+import { DEFAULT_PLANS, getPlan } from '@/lib/plans'
 
 export function AccountScreen() {
   const { state, updateUser, resetDemoData } = useGallery()
@@ -15,6 +16,8 @@ export function AccountScreen() {
   const [email, setEmail] = useState(state.user?.email ?? '')
   const [password, setPassword] = useState('')
   const [saving, setSaving] = useState(false)
+  const plans = state.plans?.length ? state.plans : DEFAULT_PLANS
+  const currentPlan = getPlan(state.user?.planId ?? 'free', plans)
 
   const save = async () => {
     if (!name.trim() || !email.includes('@')) {
@@ -55,12 +58,24 @@ export function AccountScreen() {
             placeholder="Leave blank to keep current"
           />
         </label>
+        <div className="account-plan-summary">
+          <h3>Subscription</h3>
+          <p>
+            Current plan: <b>{currentPlan.name}</b>
+          </p>
+          <Link href="/billing" className="text-button">
+            Manage billing & upgrades →
+          </Link>
+        </div>
         <div className="modal-actions left">
           <AppButton loading={saving} onClick={save}>
             Save account
           </AppButton>
           <Link href="/settings" className="outline-button">
             Branding settings
+          </Link>
+          <Link href="/billing" className="outline-button">
+            Billing
           </Link>
         </div>
         <hr className="divider" />

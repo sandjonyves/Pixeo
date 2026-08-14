@@ -76,7 +76,7 @@ export function SettingsScreen() {
       {tab === 'Branding' && (
         <div className="settings-form">
           <h3>Domain</h3>
-          <div className="field read">{username || 'username'}.pixieset.com</div>
+          <div className="field read">{username || 'username'}.pixeo.app</div>
           <p>
             Your client galleries and mobile gallery apps are always available with your default
             site address. To change your default domain, edit your username under <b>Account.</b>

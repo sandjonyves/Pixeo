@@ -1,4 +1,5 @@
-import type { AppState, Collection, Photo } from '@/lib/types'
+import type { AppState, Collection, Photo, UserAccount } from '@/lib/types'
+import { DEFAULT_PLANS, getPlan } from '@/lib/plans'
 
 const STOCK = [
   'https://images.unsplash.com/photo-1518837695005-2083093ee35b?auto=format&fit=crop&w=900&q=85',
@@ -89,14 +90,47 @@ export function createSeedState(): AppState {
     shareToken: 'share_yves_demo',
   }
 
+  const demoUser: UserAccount = {
+    id: 'user_demo',
+    name: 'Studio Demo',
+    email: 'demo@pixeo.app',
+    password: 'demo1234',
+    initials: 'S',
+    planId: 'pro',
+    role: 'photographer',
+    status: 'active',
+    createdAt: now,
+  }
+
+  const adminUser: UserAccount = {
+    id: 'user_admin',
+    name: 'Pixeo Admin',
+    email: 'admin@pixeo.app',
+    password: 'admin1234',
+    initials: 'P',
+    planId: 'studio',
+    role: 'platform_admin',
+    status: 'active',
+    createdAt: now,
+  }
+
+  const otherPhotographer: UserAccount = {
+    id: 'user_marie',
+    name: 'Marie Lens',
+    email: 'marie@studio.test',
+    password: 'marie1234',
+    initials: 'M',
+    planId: 'starter',
+    role: 'photographer',
+    status: 'active',
+    createdAt: now,
+  }
+
+  const proPlan = getPlan('pro')
+
   return {
-    user: {
-      id: 'user_demo',
-      name: 'Simple Shoot',
-      email: 'demo@simpleshoot.com',
-      password: 'demo1234',
-      initials: 'S',
-    },
+    user: demoUser,
+    accounts: [adminUser, demoUser, otherPhotographer],
     photos,
     collections: [collection],
     campaigns: [],
@@ -113,19 +147,19 @@ export function createSeedState(): AppState {
       enabled: true,
       password: '',
       biography: 'Photography with warmth and clarity.',
-      brandName: 'SIMPLESHOOT',
+      brandName: 'PIXEO',
     },
     branding: {
-      username: 'simpleshoot',
+      username: 'pixeo-demo',
       customDomain: '',
       watermarkEnabled: false,
-      watermarkText: 'SimpleShoot',
+      watermarkText: 'Pixeo',
     },
-    storageLimitBytes: 3 * 1024 * 1024 * 1024,
+    storageLimitBytes: proPlan.storageLimitBytes,
     notifications: [
       {
         id: 'n1',
-        message: 'Welcome to Client Gallery',
+        message: 'Welcome to Pixeo',
         read: false,
         createdAt: now,
       },
@@ -136,6 +170,16 @@ export function createSeedState(): AppState {
       { id: 'preset_clean', name: 'Clean Center', coverLayout: 'center' },
       { id: 'preset_novel', name: 'Editorial Novel', coverLayout: 'novel' },
       { id: 'preset_vintage', name: 'Vintage Frame', coverLayout: 'vintage' },
+    ],
+    plans: DEFAULT_PLANS.map((p) => ({ ...p })),
+    billingHistory: [
+      {
+        id: 'bill_1',
+        label: 'Pro plan — monthly',
+        amountFcfa: 5000,
+        createdAt: now,
+        status: 'paid',
+      },
     ],
   }
 }

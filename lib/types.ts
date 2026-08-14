@@ -119,6 +119,18 @@ export type UserAccount = {
   email: string
   password: string
   initials: string
+  planId: import('@/lib/plans').PlanId
+  role: 'photographer' | 'platform_admin'
+  status: 'active' | 'suspended'
+  createdAt: string
+}
+
+export type BillingEvent = {
+  id: string
+  label: string
+  amountFcfa: number
+  createdAt: string
+  status: 'paid' | 'pending' | 'failed'
 }
 
 export type EmailShareRecord = {
@@ -137,6 +149,8 @@ export type EmailShareRecord = {
 
 export type AppState = {
   user: UserAccount | null
+  /** All platform accounts (admin + photographers) for mock multi-tenant */
+  accounts: UserAccount[]
   photos: Photo[]
   collections: Collection[]
   campaigns: Campaign[]
@@ -148,6 +162,8 @@ export type AppState = {
   emailHistory: EmailShareRecord[]
   galleryActivities: GalleryActivity[]
   presets: { id: string; name: string; coverLayout: CoverLayout }[]
+  plans: import('@/lib/plans').PlanDefinition[]
+  billingHistory: BillingEvent[]
 }
 
 export type ToastTone = 'success' | 'error' | 'info'

@@ -17,7 +17,7 @@ export function HomepageScreen() {
   const siteUrl =
     typeof window !== 'undefined'
       ? `${window.location.origin}/site`
-      : `https://${state.branding.username}.pixieset.com`
+      : `https://${state.branding.username}.pixeo.app`
 
   const listed = state.collections.filter((c) => c.showOnHomepage && c.status === 'published')
 
@@ -117,7 +117,7 @@ export function HomepageScreen() {
 
         <div className="site-preview">
           <div className="preview-window">
-            <b>{state.homepage.brandName || 'SIMPLESHOOT'}</b>
+            <b>{state.homepage.brandName || 'Pixeo'}</b>
             <p className="preview-bio">{bio || 'Your biography will appear here.'}</p>
             <div className="preview-squares">
               {listed.slice(0, 6).map((collection) => {

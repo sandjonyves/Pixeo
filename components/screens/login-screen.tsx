@@ -12,7 +12,7 @@ export function LoginScreen() {
   const { notify } = useToast()
   const router = useRouter()
   const params = useSearchParams()
-  const [email, setEmail] = useState('demo@simpleshoot.com')
+  const [email, setEmail] = useState('demo@pixeo.app')
   const [password, setPassword] = useState('demo1234')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
@@ -29,7 +29,15 @@ export function LoginScreen() {
       return
     }
     notify('Welcome back')
-    router.replace(params.get('next') || '/collections')
+    const next = params.get('next')
+    const normalized = email.trim().toLowerCase()
+    if (next) {
+      router.replace(next)
+    } else if (normalized === 'admin@pixeo.app') {
+      router.replace('/admin')
+    } else {
+      router.replace('/collections')
+    }
   }
 
   return (
@@ -37,10 +45,13 @@ export function LoginScreen() {
       <form className="auth-card" onSubmit={onSubmit}>
         <div className="brand auth-brand">
           <span className="brand-mark">◒</span>
-          <b>Client Gallery</b>
+          <b>Pixeo</b>
         </div>
         <h1>Sign in</h1>
-        <p className="auth-sub">Demo: demo@simpleshoot.com / demo1234</p>
+        <p className="auth-sub">
+          Demo: demo@pixeo.app / demo1234<br />
+          Admin: admin@pixeo.app / admin1234
+        </p>
         <label>
           Email
           <input

@@ -7,13 +7,12 @@ import {
   Bell,
   ChevronDown,
   CircleHelp,
+  CreditCard,
   LogOut,
-  Mail,
-  Plus,
   Settings as SettingsIcon,
   User,
 } from 'lucide-react'
-import { marketingHref, mainNav } from '@/lib/nav'
+import { studioNav } from '@/lib/nav'
 import { useGallery } from '@/lib/gallery-context'
 import { useToast } from '@/components/toast-provider'
 import type { DashboardRoute } from '@/lib/nav'
@@ -23,7 +22,7 @@ function routeFromPathname(pathname: string): DashboardRoute | 'other' {
   if (pathname.startsWith('/starred')) return 'starred'
   if (pathname.startsWith('/homepage')) return 'homepage'
   if (pathname.startsWith('/settings')) return 'settings'
-  if (pathname.startsWith('/campaign') || pathname.startsWith('/contacts')) return 'campaigns'
+  if (pathname.startsWith('/billing')) return 'billing'
   if (pathname.startsWith('/collections')) return 'collections'
   return 'other'
 }
@@ -32,8 +31,6 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const router = useRouter()
   const route = routeFromPathname(pathname)
-  const marketingOpen =
-    route === 'campaigns' || pathname.startsWith('/campaign') || pathname.startsWith('/contacts')
   const { state, usedStorageLabel, usedStorageBytes, logout, markNotificationsRead } = useGallery()
   const { notify } = useToast()
   const [accountOpen, setAccountOpen] = useState(false)
@@ -54,7 +51,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
       <header className="dashboard-top">
         <Link href="/collections" className="brand">
           <span className="brand-mark">◒</span>
-          <b>Client Gallery</b>
+          <b>Pixeo</b>
           <ChevronDown size={14} />
         </Link>
         <div className="top-user">
@@ -130,6 +127,15 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
                   type="button"
                   onClick={() => {
                     setAccountOpen(false)
+                    router.push('/billing')
+                  }}
+                >
+                  <CreditCard size={16} /> Billing
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAccountOpen(false)
                     router.push('/settings')
                   }}
                 >
@@ -154,47 +160,17 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
 
       <aside className="dashboard-sidebar">
         <nav>
-          {mainNav.map(({ label, icon: Icon, href, route: itemRoute }) => (
+          {studioNav.map(({ label, icon: Icon, href, route: itemRoute }) => (
             <Link
               key={itemRoute}
               href={href}
-              className={route === itemRoute && itemRoute !== 'campaigns' ? 'active' : undefined}
+              className={route === itemRoute ? 'active' : undefined}
             >
               <Icon size={23} />
               <span>{label}</span>
             </Link>
           ))}
         </nav>
-
-        <div className="tools">
-          <small>Tools</small>
-          <Link href={marketingHref} className={marketingOpen ? 'active' : undefined}>
-            <Mail size={23} />
-            <span>Marketing</span>
-          </Link>
-          {marketingOpen && (
-            <div className="subnav">
-              <Link
-                href="/campaigns"
-                className={pathname.startsWith('/campaigns') ? 'active' : undefined}
-              >
-                <Mail size={20} />
-                Email Campaigns
-              </Link>
-              <Link
-                href="/contacts"
-                className={pathname.startsWith('/contacts') ? 'active' : undefined}
-              >
-                <span className="sub-icon">♙</span>
-                Contacts
-              </Link>
-              <Link href="/settings">
-                <SettingsIcon size={20} />
-                Settings
-              </Link>
-            </div>
-          )}
-        </div>
 
         <div className="storage" title={usedStorageLabel}>
           <span
@@ -208,9 +184,9 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
             type="button"
             className="storage-add"
             aria-label="Upgrade storage"
-            onClick={() => notify('Upgrade plans unlock more storage and custom domains.', 'info')}
+            onClick={() => router.push('/billing')}
           >
-            <Plus size={16} />
+            ↑
           </button>
         </div>
       </aside>

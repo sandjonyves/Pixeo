@@ -40,6 +40,7 @@ import { AppButton } from '@/components/app-button'
 import { ConfirmDialog, Modal } from '@/components/modal'
 import { CoverLayoutPicker, CoverPreview } from '@/components/editor/cover-preview'
 import { ShareCollectionOverlay } from '@/components/editor/share-collection-overlay'
+import { UpgradeModal } from '@/components/upgrade-modal'
 import {
   CollectionSettingsNav,
   CollectionSettingsPanel,
@@ -81,6 +82,7 @@ export function EditorScreen({ collectionId }: { collectionId: string }) {
     duplicateCollection,
     savePreset,
     applyPreset,
+    canUploadBytes,
   } = useGallery()
   const { notify } = useToast()
 
@@ -128,6 +130,8 @@ export function EditorScreen({ collectionId }: { collectionId: string }) {
   const [uploading, setUploading] = useState(false)
   const [confirmDeleteSet, setConfirmDeleteSet] = useState<string | null>(null)
   const [confirmDeleteCollection, setConfirmDeleteCollection] = useState(false)
+  const [upgradeOpen, setUpgradeOpen] = useState(false)
+  const [upgradeMessage, setUpgradeMessage] = useState('')
   const [dragFrom, setDragFrom] = useState<number | null>(null)
   const [titleEditing, setTitleEditing] = useState(false)
   const [titleDraft, setTitleDraft] = useState(collection?.name ?? '')
@@ -176,6 +180,13 @@ export function EditorScreen({ collectionId }: { collectionId: string }) {
         notify('Select image files only.', 'error')
         return
       }
+      const totalBytes = images.reduce((sum, img) => sum + img.sizeBytes, 0)
+      const limit = canUploadBytes(totalBytes)
+      if (!limit.ok) {
+        setUpgradeMessage(limit.error || 'Storage limit reached')
+        setUpgradeOpen(true)
+        return
+      }
       addPhotosToCollection(collection.id, images, activeSetId)
       notify(`${images.length} photo(s) uploaded`)
       setModal(null)
@@ -184,6 +195,16 @@ export function EditorScreen({ collectionId }: { collectionId: string }) {
     } finally {
       setUploading(false)
     }
+  }
+
+  const openAddMedia = () => {
+    const probe = canUploadBytes(500_000)
+    if (!probe.ok) {
+      setUpgradeMessage(probe.error || 'Storage limit reached')
+      setUpgradeOpen(true)
+      return
+    }
+    setModal('media')
   }
 
   const downloadPhoto = async (photo: Photo) => {
@@ -374,7 +395,7 @@ export function EditorScreen({ collectionId }: { collectionId: string }) {
               </div>
             )}
           </div>
-          <button type="button" onClick={() => window.open(publicUrl, '_blank')}>
+          <button type="button" onClick={() => window.open(`${publicUrl}?preview=1`, '_blank')}>
             Preview
           </button>
           {collection.status === 'published' ? (
@@ -642,7 +663,7 @@ export function EditorScreen({ collectionId }: { collectionId: string }) {
                     Move
                   </button>
                 )}
-                <AppButton onClick={() => setModal('media')}>＋ Add Media</AppButton>
+                <AppButton onClick={openAddMedia}>＋ Add Media</AppButton>
               </div>
             </div>
 
@@ -651,7 +672,7 @@ export function EditorScreen({ collectionId }: { collectionId: string }) {
                 <Upload size={42} />
                 <h2>Add photos to this set</h2>
                 <p>Upload from your computer or insert sample photos.</p>
-                <AppButton onClick={() => setModal('media')}>Add Media</AppButton>
+                <AppButton onClick={openAddMedia}>Add Media</AppButton>
               </div>
             ) : (
               <div className="photo-grid" style={{ gridTemplateColumns: `repeat(${gridCols}, minmax(100px, 1fr))` }}>
@@ -1305,6 +1326,15 @@ export function EditorScreen({ collectionId }: { collectionId: string }) {
           notify('Collection deleted')
           router.push('/collections')
         }}
+      />
+
+      <UpgradeModal
+        open={upgradeOpen}
+        onClose={() => setUpgradeOpen(false)}
+        title="Storage full"
+        message={upgradeMessage}
+        ctaHref="/billing"
+        ctaLabel="Upgrade plan"
       />
 
       <button
