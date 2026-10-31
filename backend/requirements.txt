@@ -1,0 +1,39 @@
+# Pixeo backend — runtime dependencies
+# Python 3.12 — Django 5.2 LTS
+#
+# Les versions sont figées pour garantir des installations reproductibles.
+# Les dépendances de développement/test seront ajoutées dans un fichier séparé
+# lors du lot A2 (pytest, pytest-django, ruff, etc.).
+
+Django==5.2.18
+djangorestframework==3.18.3
+djangorestframework-simplejwt==5.5.1
+
+# API, filtrage, schéma OpenAPI
+django-cors-headers==4.9.0
+django-filter==26.2
+drf-spectacular==0.30.0
+
+# Configuration et base de données
+django-environ==0.14.0
+dj-database-url==3.1.2
+psycopg[binary]==3.3.6
+
+# Images et stockage local / S3-R2
+Pillow==13.0.0
+django-storages[s3]==1.14.6
+boto3==1.43.123
+
+# Sécurité
+argon2-cffi==25.1.0
+django-ratelimit==4.1.0
+
+# Cache, tâches asynchrones et rate limiting distribué
+# redis 6.4.x est requis par kombu[redis] (contrainte < 6.5) utilisé par Celery.
+django-redis==7.0.0
+celery[redis]==5.6.3
+redis==6.4.0
+
+# Service HTTP et fichiers statiques (admin Django)
+gunicorn==26.2.0
+whitenoise==6.12.0

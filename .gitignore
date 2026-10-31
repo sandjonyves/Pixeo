@@ -19,3 +19,25 @@ __v0_jsx-dev-runtime.ts
 .snowflake/
 .v0-trash/*.tsbuildinfo
 *.tsbuildinfo
+
+# Python / Django backend
+backend/.venv/
+backend/venv/
+__pycache__/
+*.py[cod]
+*.pyd
+*.sqlite3
+backend/db.sqlite3
+backend/media/
+backend/staticfiles/
+backend/.env
+backend/.env.*
+!backend/.env.example
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+.celerybeat-schedule
+celerybeat-schedule.*

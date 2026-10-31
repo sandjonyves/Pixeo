@@ -1,178 +1,261 @@
 # Pixeo — Architecture cible
 
-Frontend actuel : **Next.js 16 (App Router)** + React, état local (`localStorage`) pour la démo.  
-Backend recommandé pour la production : **Supabase** (auth + Postgres) + **Cloudflare R2** ou **Backblaze B2** (photos).
+> **Statut : référence validée, lot A1.**
+> Le backend n'est pas encore implémenté. Ce document décrit la cible Django/DRF
+> validée ; il ne remplace pas `DEVELOPMENT_PROGRESS.md`, qui suit l'avancement réel.
 
-## Vue d'ensemble
+## 1. Vue d'ensemble
+
+Pixeo est un SaaS de galeries photo pour photographes.
+
+| Couche | Technologie | Rôle |
+|--------|-------------|------|
+| Frontend | Next.js 16 (App Router), React, TypeScript | Dashboard photographe, galeries publiques, console admin |
+| API | Django 5.2 LTS + Django REST Framework | Métier, authentification, permissions, quotas |
+| Base | PostgreSQL (production), SQLite (développement) | Données relationnelles |
+| Cache / files | Redis + Celery | Cache, rate limiting, tâches asynchrones |
+| Fichiers | Stockage local (dev) / S3 ou Cloudflare R2 (prod) | Originaux et dérivés |
+| Reverse proxy | Nginx ou équivalent | TLS, sous-domaines, headers |
 
 ```mermaid
 flowchart LR
-  Client[Navigateur / App Next.js]
-  Next[Next.js API Routes]
-  SB[(Supabase Postgres)]
-  Auth[Supabase Auth]
-  R2[(R2 / B2 bucket)]
+  Browser[Navigateur]
+  Next[Next.js — app / admin / galeries]
+  API[Django REST API]
+  DB[(PostgreSQL)]
+  Redis[(Redis)]
+  Worker[Celery worker]
+  Storage[(S3 / R2 / média local)]
   CDN[CDN public]
 
-  Client --> Next
-  Client --> Auth
-  Next --> SB
-  Next --> R2
-  R2 --> CDN
-  Client --> CDN
+  Browser --> Next
+  Next -->|HTTPS JSON| API
+  Browser -->|galeries publiques| API
+  API --> DB
+  API --> Redis
+  API --> Storage
+  Worker --> DB
+  Worker --> Storage
+  Storage --> CDN
 ```
 
-| Couche | Rôle |
-|--------|------|
-| Next.js | UI dashboard, galeries publiques `/c/[slug]`, API routes (`/api/health`, uploads signés, webhooks Stripe) |
-| Supabase Auth | Email/mot de passe, JWT, RLS par `user_id` |
-| Postgres | Métadonnées utilisateurs, plans, abonnements, galeries, photos |
-| R2 / B2 | Fichiers originaux + dérivés (thumb, web) |
-| Stripe (phase 2) | Abonnements FCFA, webhooks → table `subscriptions` |
+## 2. Multi-tenant et résolution du photographe
 
-## Schéma Postgres (recommandé)
+Le tenant est le **photographe** (`accounts.User`). Il n'existe pas de modèle
+`Tenant` séparé.
 
-### `users`
-Extension du profil Supabase (`auth.users.id` = PK).
+- Clé de tenant : `User.branding_username`, unique et immuable pendant une session.
+- En production, le sous-domaine détermine le tenant :
+  `https://{username}.pixeo.com/`.
+- Les URLs publiques de galerie incluent le username pour une résolution explicite
+  côté API : `https://api.pixeo.com/api/v1/public/{username}/galleries/{slug}/`.
+- Le domaine de base est configurable via `PIXEO_BASE_DOMAIN`.
+- Les URLs plateforme sont séparées :
+  - application photographe : `https://app.pixeo.com/`
+  - console admin : `https://admin.pixeo.com/`
+  - API : `https://api.pixeo.com/`
+  - espace public : `https://{username}.pixeo.com/`
+  - galerie publique : `https://{username}.pixeo.com/{gallery-slug}/`
+  - lien privé pre-release : `https://{username}.pixeo.com/p/{share_token}/`
 
-| Colonne | Type | Notes |
-|---------|------|-------|
-| `id` | uuid PK | = `auth.users.id` |
-| `email` | text | dénormalisé pour admin |
-| `name` | text | |
-| `initials` | text | |
-| `role` | text | `photographer` \| `platform_admin` |
-| `status` | text | `active` \| `suspended` |
-| `plan_id` | text FK → plans | plan courant (cache) |
-| `branding_username` | text unique | sous-domaine / slug public |
-| `storage_used_bytes` | bigint | agrégat |
-| `created_at` | timestamptz | |
-| `updated_at` | timestamptz | |
+> La disponibilité de `pixeo.com`, le DNS wildcard et les certificats TLS ne sont
+> pas vérifiés à ce stade. Ils ne bloquent pas le développement local.
 
-### `plans`
-Catalogue éditable (admin Pixeo).
+## 3. Applications Django
 
-| Colonne | Type |
-|---------|------|
-| `id` | text PK (`free`, `starter`, `pro`, `studio`) |
-| `name` | text |
-| `price_monthly_fcfa` | int |
-| `storage_limit_bytes` | bigint |
-| `gallery_limit` | int nullable |
-| `features` | jsonb |
-| `active` | boolean |
-| `sort_order` | int |
+| App | Responsabilité |
+|-----|----------------|
+| `accounts` | Utilisateur custom, authentification, rôles, statuts, sessions JWT |
+| `billing` | Plans, abonnements, historique de facturation (sans paiement V1) |
+| `studios` | Branding, homepage publique, préférences du photographe |
+| `galleries` | Collections/galeries, sets, photos, liaisons, accès, activités |
+| `contacts` | Contacts clients et historique de partage |
+| `marketing` | Campagnes email (V1 : stockage/brouillon, pas d'envoi réel) |
+| `platform` | Administration plateforme, paramètres globaux, audit |
+| `common` | Mixins, permissions, pagination, erreurs, stockage, utilitaires |
 
-### `subscriptions`
-Source de vérité billing (Stripe plus tard).
+Règles :
 
-| Colonne | Type |
-|---------|------|
-| `id` | uuid PK |
-| `user_id` | uuid FK → users |
-| `plan_id` | text FK → plans |
-| `status` | text |
-| `current_period_start` | timestamptz |
-| `current_period_end` | timestamptz |
-| `cancel_at_period_end` | boolean |
-| `stripe_customer_id` | text nullable |
-| `stripe_subscription_id` | text nullable |
+- Aucune logique métier dans les vues au-delà de l'orchestration.
+- Les querysets sont toujours filtrés par tenant.
+- Les permissions sont explicites et testées.
+- Les opérations sensibles utilisent `transaction.atomic()`.
+
+## 4. Modèle de données cible
+
+Les noms Python sont en `snake_case` ; les serializers exposent du `camelCase`.
+
+### `accounts.User`
+
+Utilisateur custom créé **avant la première migration**.
+
+| Champ | Type | Notes |
+|-------|------|-------|
+| `id` | UUID | PK |
+| `email` | email unique | Identifiant de connexion |
+| `name` | char | Nom affiché |
+| `initials` | char | Dérivé, stocké pour l'UI |
+| `role` | choix | `photographer` / `platform_admin` |
+| `status` | choix | `active` / `suspended` |
+| `branding_username` | slug unique | Clé de tenant et sous-domaine |
+| `storage_used_bytes` | bigint | Agrégat cache, recalculable |
+| `is_active`, `is_staff` | bool | Compatibilité Django admin |
+| `created_at`, `updated_at` | datetime | |
+
+**Pas de champ `plan` sur `User`.** Le plan actif est porté par `Subscription`.
+
+### `billing.Plan` et `billing.Subscription`
+
+- `Plan` : catalogue éditable par l'admin (`free`, `starter`, `pro`, `studio`),
+  prix FCFA, quota de stockage, fonctionnalités, ordre, actif.
+- **Aucune limite de nombre de galeries**, quel que soit le plan. Seul le stockage
+  est limité.
+- `Subscription` est la **source de vérité** du plan actif :
+  `user`, `plan`, `status`, dates de période, `cancel_at_period_end`.
+- En V1, le changement de plan est réservé à l'admin plateforme. Aucun paiement
+  Stripe n'est intégré.
+
+### `studios.Branding` et `studios.HomepageSettings`
+
+- `Branding` : 1:1 avec `User` — logo, favicon, filigrane, domaine custom (V1 :
+  stocké mais non routé).
+- `HomepageSettings` : 1:1 avec `User` — activation, biographie, nom de marque,
+  mot de passe **hashé**.
+- Les galeries `pre-release` ne sont jamais listées sur la homepage.
 
 ### `galleries`
 
-| Colonne | Type |
-|---------|------|
-| `id` | uuid PK |
-| `user_id` | uuid FK → users |
-| `name` | text |
-| `slug` | text |
-| `status` | text |
-| `cover_photo_id` | uuid nullable FK → photos |
-| `cover_layout` | text |
-| `cover_focal` | jsonb |
-| `event_date` | date nullable |
-| `password_hash` | text nullable |
-| `client_exclusive` | boolean |
-| `download_enabled` | boolean |
-| `favorites_enabled` | boolean |
-| `show_on_homepage` | boolean |
-| `share_token` | text unique |
-| `published_at` | timestamptz nullable |
+| Modèle | Rôle |
+|--------|------|
+| `Collection` | Galerie client (le frontend parle de « collection ») |
+| `CollectionSet` | Set ordonné à l'intérieur d'une collection |
+| `Photo` | Fichier de la bibliothèque du photographe |
+| `CollectionPhoto` | Liaison N:N photo ↔ collection, avec ordre et set optionnel |
+| `FavoriteList` | Liste de favoris configurée par le photographe |
+| `GalleryActivity` | Journal d'activité : vue, téléchargement, favori, note |
 
-Contrainte unique : `(user_id, slug)`.
+Points clés :
 
-### `gallery_sets`
+- Une photo appartient à la **bibliothèque du photographe** (`Photo.owner`) et peut
+  être rattachée à **plusieurs collections** via `CollectionPhoto`.
+- Retirer une photo d'une collection supprime la ligne `CollectionPhoto`, **jamais**
+  le fichier de bibliothèque.
+- Supprimer une collection ne supprime **jamais** les photos utilisées ailleurs.
+- `Collection` porte notamment : `slug`, `status` (`published`, `draft`, `hidden`,
+  `pre-release`), visibilité homepage, mot de passe hashé, code d'accès client
+  exclusif hashé, options de téléchargement, PIN de téléchargement hashé, favoris,
+  notes, `share_token`, dates d'expiration.
+- Contrainte d'unicité : `(owner, slug)`.
+- `share_token` est unique et imprévisible ; il sert au lien privé pre-release.
+- L'expiration est vérifiée **côté serveur**, à chaque accès.
 
-| Colonne | Type |
-|---------|------|
-| `id` | uuid PK |
-| `gallery_id` | uuid FK |
-| `name` | text |
-| `description` | text |
-| `sort_order` | int |
+### Autres
 
-### `photos`
+- `contacts.Contact`, `contacts.EmailShare` : contacts et historique de partage.
+- `marketing.Campaign` : campagnes (V1 : brouillon/stockage, pas d'envoi réel).
+- `platform.*` : paramètres globaux et journal d'audit admin.
 
-| Colonne | Type |
-|---------|------|
-| `id` | uuid PK |
-| `gallery_id` | uuid FK |
-| `user_id` | uuid FK |
-| `set_id` | uuid nullable FK |
-| `name` | text |
-| `storage_key` | text |
-| `public_url` | text |
-| `thumb_url` | text nullable |
-| `size_bytes` | bigint |
-| `width` | int nullable |
-| `height` | int nullable |
-| `sort_order` | int |
+## 5. Authentification et sessions
 
-Index : `(gallery_id, sort_order)`, `(user_id)`.
+### Photographe / admin
 
-### Tables auxiliaires (phase 2)
-- `gallery_activities` — vues, téléchargements, favoris
-- `billing_events` — historique factures
-- `homepage_settings` — 1:1 avec `users`
-- `branding_settings` — watermark, logo, domaine custom
+- Access token JWT courte durée, conservé **en mémoire** côté navigateur.
+- Refresh token dans un cookie **HttpOnly**, `Secure` en production, `SameSite`
+  adapté, avec rotation et blacklist.
+- Protection CSRF sur les requêtes mutantes (double-submit token).
+- CORS limité aux origines Pixeo connues.
+- Les sessions photographe et l'accès public aux galeries sont **séparés** : un
+  visiteur de galerie ne reçoit jamais de JWT photographe.
 
-## Row Level Security (Supabase)
+### Accès public aux galeries
 
-- Photographe : CRUD sur ses lignes (`user_id = auth.uid()`).
-- Public : lecture seule sur galeries `status = published` via RPC ou vue `public_galleries`.
-- Admin : rôle `platform_admin` via claim JWT ou table `user_roles`.
+- Résolution du tenant par username (URL ou sous-domaine).
+- Galerie `published` : accès selon les règles de la collection.
+- Galerie protégée : vérification serveur du mot de passe hashé, puis session
+  d'accès limitée à cette galerie.
+- Galerie `pre-release` : accessible uniquement via `share_token`, jamais listée
+  sur la homepage, expiration vérifiée côté serveur.
+- Accès client exclusif : code dédié généré par le photographe, stocké hashé.
+- PIN de téléchargement : hashé, vérifié côté serveur, tentatives limitées.
+- `?preview=1` ne contourne **jamais** les contrôles : la prévisualisation owner
+  exige une authentification photographe et vérifie la propriété de la collection.
 
-## Upload photos (R2 / B2)
+### Secrets
 
-1. Client demande URL signée : `POST /api/photos/upload-url`.
-2. Next vérifie quota storage + plan.
-3. Upload direct navigateur → bucket (`/{userId}/{galleryId}/{photoId}.jpg`).
-4. Webhook ou callback enregistre la ligne `photos` + met à jour `storage_used_bytes`.
+Mots de passe de galerie, mot de passe de homepage, PIN de téléchargement et code
+d'accès client sont **hashés** (hashers Django, Argon2 privilégié). Aucune API ne
+les retourne en clair. Une procédure de réinitialisation est fournie ; il n'existe
+pas de récupération.
 
-Variables : voir `.env.example` (`R2_*` ou `B2_*`).
+## 6. Stockage des images
 
-## Contrat API frontend
+Abstraction via le backend de stockage Django :
 
-Types partagés dans `lib/api/types.ts`. Endpoints minimaux v1 :
+- **Développement** : upload multipart vers Django, fichiers dans `MEDIA_ROOT`.
+- **Production** : S3 ou Cloudflare R2 via `django-storages`, URLs signées.
+- Les clés de stockage sont stables et ne dépendent pas du provider.
+- La logique métier (quotas, collections, permissions) ne change pas selon le
+  backend.
+- Les dérivés (thumbnail, web, haute résolution) sont générés par des tâches
+  Celery ; les originaux restent la source.
 
-| Méthode | Route | Description |
-|---------|-------|-------------|
-| GET | `/api/health` | Santé service |
-| GET | `/api/galleries` | Liste (auth) |
-| POST | `/api/galleries` | Créer |
-| GET | `/api/galleries/[slug]/public` | Galerie publique |
-| POST | `/api/photos/upload-url` | URL signée |
-| PATCH | `/api/users/me/plan` | Changement plan (mock → Stripe) |
+## 7. API
 
-## Migration depuis la démo
+- Préfixe : `/api/v1/`.
+- Réponses en `camelCase`, erreurs uniformes.
+- Pagination standard, filtres et tri explicites.
+- Documentation OpenAPI générée avec `drf-spectacular`.
+- Détail du contrat : [`API_DOCUMENTATION.md`](API_DOCUMENTATION.md).
 
-1. Remplacer `lib/gallery-context.tsx` par hooks fetch + Supabase client.
-2. Conserver les écrans ; mapper `AppState` → réponses API.
-3. Seed : script SQL reprenant `lib/seed.ts` (comptes démo, galerie Yves).
-4. Galeries publiques : SSR ou ISR sur `/c/[slug]` avec données serveur (pas `localStorage`).
+## 8. Sécurité
 
-## Déploiement
+- Isolation stricte par tenant dans les vues, querysets, serializers et permissions.
+- Aucun accès à un objet d'un autre photographe, même avec un UUID valide.
+- Rate limiting sur connexion, mots de passe de galerie, codes d'accès et PIN.
+- Transactions pour inscription, changement de plan, suppression de collection,
+  retrait de photos, création de partage.
+- Validation des uploads : type MIME, taille, dimensions, nom de fichier.
+- Pas de succès simulé : une fonctionnalité non configurée renvoie une erreur
+  explicite (`not_configured`) ou est désactivée.
+- Journalisation des actions admin sensibles.
 
-- **Vercel** : `next build` suffit ; pas de `vercel.json` obligatoire.
-- Env : `NEXT_PUBLIC_APP_URL`, clés Supabase, R2.
-- Domaine custom photographe : middleware + table `custom_domains`.
+## 9. Hors périmètre V1
+
+- Envoi réel d'emails (les emails sont journalisés/console en développement).
+- Stripe, paiements et facturation réelle.
+- Boutique / vente de tirages.
+- Intégrations externes.
+- Routage des domaines custom (le champ est stocké, pas routé).
+- Application mobile native.
+
+## 10. Déploiement cible
+
+| Composant | Cible |
+|-----------|-------|
+| Frontend | Vercel ou équivalent |
+| API | Serveur WSGI (Gunicorn) derrière Nginx |
+| Base | PostgreSQL managé |
+| Cache / broker | Redis managé |
+| Worker | Celery |
+| Fichiers | S3 / R2 + CDN |
+| DNS | wildcard `*.pixeo.com` + `api` + `app` + `admin` |
+| TLS | Certificats wildcard / automatiques |
+
+## 11. Migration depuis la démo
+
+La démo frontend utilise `localStorage`. La bascule se fera en **Phase E**, après
+validation du backend :
+
+1. Remplacer `lib/gallery-context.tsx` par des appels API.
+2. Conserver les écrans et mapper les types `camelCase`.
+3. Servir les galeries publiques depuis l'API (pas `localStorage`).
+4. Adapter l'UI aux secrets hashés (création/réinitialisation, jamais affichage).
+5. Supprimer les données de démonstration du chemin de production.
+
+## 12. Documentation
+
+- [`ARCHITECTURE.md`](ARCHITECTURE.md) — ce document
+- [`API_DOCUMENTATION.md`](API_DOCUMENTATION.md) — contrat API
+- [`DEVELOPMENT_PROGRESS.md`](DEVELOPMENT_PROGRESS.md) — avancement par lot
+- [`LOCAL_DEVELOPMENT.md`](LOCAL_DEVELOPMENT.md) — sous-domaines et environnement local
+- [`LAUNCH.md`](LAUNCH.md) — checklist de lancement (à actualiser en Phase E)
