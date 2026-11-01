@@ -1,7 +1,7 @@
 # Pixeo — Développement backend
 
 > Dernière mise à jour : 2026-11-01
-> Lot en cours : **A2 — Configuration Django et utilisateur custom** (réalisé, en attente de validation)
+> Lot en cours : **A3 — PostgreSQL, migrations initiales et Django Admin** (réalisé, en attente de validation)
 
 ## 1. Méthode de travail
 
@@ -22,8 +22,8 @@ n'est modifié par les lots backend avant la Phase E.
 | Phase | Lot | Périmètre | Statut |
 |-------|-----|-----------|--------|
 | A | **A1** | Squelette `backend/`, venv, dépendances, `.env.example`, `.gitignore`, documentation, stratégie sous-domaines, audit nommage | **Réalisé — validé** |
-| A | **A2** | Projet Django, settings, configuration, utilisateur custom | **Réalisé — en attente de validation** |
-| A | A3 | Modèles, migrations initiales, admin | Non démarré |
+| A | **A2** | Projet Django, settings, configuration, utilisateur custom | **Réalisé — validé** |
+| A | **A3** | PostgreSQL, migration initiale, superutilisateur, Django Admin, health DB | **Réalisé — en attente de validation** |
 | B | — | Authentification, JWT, cookies, CSRF, permissions | Non démarré |
 | C | — | Studio, branding, homepage, plans/abonnements | Non démarré |
 | D | — | Collections, photos, stockage, accès publics, favoris/notes | Non démarré |
@@ -112,7 +112,59 @@ Le test de la base de test utilise `pytest-django --no-migrations` : les tables
 sont créées par syncdb dans une base SQLite temporaire isolée, sans générer ni
 exécuter de fichier de migration. La première migration réelle reste prévue en A3.
 
-## 6. Décisions structurantes
+## 6. Lot A3 — livrables et vérifications
+
+### Livrables
+
+| Élément | Chemin | État |
+|---------|--------|------|
+| PostgreSQL local | `backend/docker-compose.yml` | Créé (`postgres:17.6-alpine`) |
+| Migration initiale | `backend/apps/accounts/migrations/0001_initial.py` | Créée, versionnée et appliquée |
+| Administration utilisateur | `backend/apps/accounts/admin.py` | Créée |
+| Formulaires admin | `backend/apps/accounts/forms.py` | Créés |
+| Health check base | `backend/config/views.py` | Mis à jour (`SELECT 1`, HTTP 503) |
+| Tests admin | `backend/apps/accounts/tests/test_admin.py` | Créés |
+| Tests schéma/migrations | `backend/apps/accounts/tests/test_database_schema.py`, `test_migrations.py` | Créés |
+| Tests health | `backend/config/tests/test_health.py` | Créés |
+| Configuration pytest | `backend/pytest.ini` | Étendue à `apps` et `config` |
+| Guide backend | `backend/README.md` | Mis à jour |
+| Documentation locale | `docs/LOCAL_DEVELOPMENT.md` | Mise à jour |
+
+`backend/.env` contient le mot de passe PostgreSQL local et reste ignoré par Git.
+Aucun secret réel n'est présent dans `backend/.env.example` ou dans le Compose.
+
+### Vérifications réellement exécutées
+
+| Vérification | Résultat |
+|--------------|----------|
+| Docker Compose | service `pixeo-postgres` démarré, healthcheck `healthy` |
+| Version PostgreSQL | 17.6 (`pg_version=170006`) |
+| Connexion Django réelle | `vendor=postgresql`, base `pixeo`, utilisateur `pixeo` |
+| Migration `accounts.0001_initial` | appliquée sur PostgreSQL |
+| `showmigrations` | toutes les migrations `[X]`, aucune en attente |
+| `makemigrations --check --dry-run` | `No changes detected` |
+| Table `accounts_user` | présente dans PostgreSQL |
+| Contraintes | PK `id` UUID, `UNIQUE (email)`, `UNIQUE (branding_username)` |
+| Superutilisateur local | créé, `platform_admin`, `is_staff=True`, `is_superuser=True`, hash Argon2 |
+| Invariant rôle / superutilisateur | vérifié par `full_clean()` et refusé par le formulaire admin |
+| Authentification par e-mail | `authenticate()` OK, insensible à la casse |
+| Django Admin | `/admin/`, liste, recherche, filtres et fiche utilisateur accessibles (HTTP 200) |
+| Health PostgreSQL disponible | HTTP 200, `database: available` |
+| Health PostgreSQL indisponible | HTTP 503 après arrêt contrôlé du conteneur, sans fuite de détails |
+| Persistance | superutilisateur toujours présent après `docker compose stop/start` |
+| `pytest` PostgreSQL (`--no-migrations`) | **127 passed** |
+| `pytest` PostgreSQL avec migrations | **127 passed** |
+| `pytest` SQLite en mémoire | **127 passed** |
+| `pip check` | `No broken requirements found.` |
+| `manage.py check` | `System check identified no issues (0 silenced).` |
+| Fichiers frontend modifiés par A3 | 0 |
+
+Les tests PostgreSQL utilisent une base de test créée et détruite par pytest
+(`test_pixeo`) ; la base persistante `pixeo` n'est pas modifiée par la suite de
+tests. Le superutilisateur de validation est local ; son mot de passe n'est ni
+versionné ni écrit dans un fichier du dépôt.
+
+## 7. Décisions structurantes
 
 - Nom officiel : **Pixeo**. Aucune référence à SimpleShoot.
 - Tenant = `accounts.User` via `branding_username` ; pas de modèle `Tenant`.
@@ -127,7 +179,7 @@ exécuter de fichier de migration. La première migration réelle reste prévue 
 - Aucun faux succès : `not_configured` ou endpoint désactivé si non configuré.
 - Python en `snake_case`, API en `camelCase`.
 
-## 7. Problèmes rencontrés et points d'attention
+## 8. Problèmes rencontrés et points d'attention
 
 ### Problèmes résolus pendant A1
 
@@ -147,11 +199,34 @@ exécuter de fichier de migration. La première migration réelle reste prévue 
 - L'avertissement `No directory at: .../staticfiles/` est attendu tant que
   `collectstatic` n'a pas été exécuté ; il n'est pas bloquant.
 
+### Problèmes résolus pendant A3
+
+- Le tag PostgreSQL `postgres:17.6-alpine` a été vérifié avant le démarrage ;
+  aucun volume existant n'a été supprimé.
+- Le `Client` de test Django utilisait `testserver`, absent de
+  `DJANGO_ALLOWED_HOSTS` ; les vérifications réelles ont été refaites avec
+  `HTTP_HOST=localhost`.
+- Le texte d'aide du champ mot de passe est localisé en français ; le test
+  d'administration vérifie l'absence du hash et la présence du lien de
+  réinitialisation, sans dépendre d'une chaîne anglaise.
+- Les tests rapides utilisent `--no-migrations` (syncdb). Une seconde exécution
+  avec `-o addopts='-ra --strict-markers'` applique réellement les migrations à
+  la base de test PostgreSQL.
+- Le niveau `DEBUG` de `backend/.env` rend les logs SQL très verbeux ; cela
+  n'affecte pas les résultats et peut être réduit avec `DJANGO_LOG_LEVEL=INFO`.
+
 ### Points d'attention
 
 - **Travail frontend antérieur non commité** : 8 fichiers modifiés (limites de
-  galeries) ont été laissés intacts pendant A1 et A2. Ils devront être commités
-  séparément après validation.
+  galeries) ont été laissés intacts pendant A1, A2 et A3. Ils devront être
+  commités séparément après validation.
+- Les migrations `accounts.0001_initial` et les fichiers Compose/Admin/tests A3
+  sont prêts à être commités, mais **aucun commit A3 n'a été créé**.
+- Le superutilisateur créé pour la validation A3 est local ; son mot de passe
+  n'est pas versionné. Il devra être remplacé par un compte de production créé
+  selon la procédure d'exploitation.
+- Le volume Docker `pixeo_postgres_data` contient les données locales ; ne jamais
+  lancer `docker compose down -v` sans autorisation explicite.
 - `README.md` racine reste modifié par le travail frontend antérieur ; le guide
   backend est dans `backend/README.md` pour ne pas mélanger les deux.
 - `pixeo.com`, le DNS wildcard et les certificats TLS ne sont pas vérifiés.
@@ -159,16 +234,16 @@ exécuter de fichier de migration. La première migration réelle reste prévue 
 - Les dépendances de test (pytest, pytest-django) sont maintenant dans
   `backend/requirements-dev.txt`.
 
-## 8. Prochain lot
+## 9. Prochain lot
 
-**A3 — Modèles, migrations initiales et admin** (non démarré) :
+**A4 — périmètre à valider** (non démarré) :
 
-- Générer la migration initiale de `accounts` après validation du modèle custom.
-- Enregistrer l'utilisateur dans l'admin Django avec les champs Pixeo.
-- Poursuivre les modèles prévus pour A3 selon la validation explicite.
-- Ne pas démarrer les endpoints métier ni l'authentification avant les lots B/C.
+- Attendre la validation explicite du rapport A3.
+- Ne pas démarrer A4, les modèles métier, l'authentification JWT ou les endpoints
+  métier avant cette validation.
+- Les lots B/C restent non démarrés.
 
-## 9. Commandes utiles
+## 10. Commandes utiles
 
 ```bash
 # Backend
@@ -179,7 +254,21 @@ pip install -r requirements.txt
 pip install -r requirements-dev.txt
 pip check
 python manage.py check
-pytest
+
+# PostgreSQL local
+docker compose up -d
+docker compose ps
+docker compose exec postgres pg_isready -U pixeo -d pixeo
+
+# Migrations
+python manage.py makemigrations --check --dry-run
+python manage.py migrate
+python manage.py showmigrations
+
+# Tests
+pytest -q
+pytest -q -o addopts='-ra --strict-markers'
+DATABASE_URL='sqlite:///:memory:' pytest -q
 
 # Frontend (existant)
 pnpm dev

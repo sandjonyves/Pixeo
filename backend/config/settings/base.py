@@ -83,6 +83,10 @@ DATABASES = {
         conn_max_age=env.int("DATABASE_CONN_MAX_AGE", default=0),
     )
 }
+# Vérifie les connexions persistantes avant réutilisation. Sans effet lorsque
+# CONN_MAX_AGE vaut 0 (nouvelle connexion à chaque requête).
+if DATABASES["default"].get("CONN_MAX_AGE", 0):
+    DATABASES["default"]["CONN_HEALTH_CHECKS"] = True
 
 # ─── Authentification ─────────────────────────────────────────────────────────
 AUTH_USER_MODEL = "accounts.User"

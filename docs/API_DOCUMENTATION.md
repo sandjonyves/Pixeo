@@ -1,9 +1,11 @@
 # Pixeo — Contrat API
 
-> **Statut : document de conception, lot A2.**
+> **Statut : document de conception, lot A3.**
 > Seuls les endpoints techniques `health`, `schema` et `docs` sont implémentés.
-> Les chemins métier ci-dessous constituent la cible validée et seront ajustés,
-> le cas échéant, lors des lots backend.
+> La migration initiale, PostgreSQL et Django Admin sont en place ; aucun endpoint
+> métier ni authentification JWT n'est encore exposé. Les chemins métier
+> ci-dessous constituent la cible validée et seront ajustés, le cas échéant, lors
+> des lots backend.
 
 ## 1. Conventions générales
 
@@ -62,7 +64,7 @@ Codes d'erreur prévus : `validation_error`, `authentication_required`,
 | 410 | Lien ou galerie expiré |
 | 422 | Validation métier |
 | 429 | Rate limit |
-| 503 | Fonctionnalité non configurée |
+| 503 | Base indisponible ou fonctionnalité non configurée |
 
 ## 2. Authentification
 
@@ -220,9 +222,31 @@ Toutes les routes admin exigent `role = platform_admin` et sont auditées.
 
 | Méthode | Route | Description |
 |---------|-------|-------------|
-| GET | `/api/v1/health/` | `{ "ok": true, "service": "pixeo" }` |
+| GET | `/api/v1/health/` | Vérifie Django et PostgreSQL (`SELECT 1`) |
 | GET | `/api/v1/schema/` | OpenAPI (prévu) |
 | GET | `/api/v1/docs/` | Documentation interactive (prévu) |
+
+Health check disponible (HTTP 200) :
+
+```json
+{
+  "ok": true,
+  "service": "pixeo",
+  "database": "available"
+}
+```
+
+Health check avec base indisponible (HTTP 503) :
+
+```json
+{
+  "ok": false,
+  "service": "pixeo",
+  "database": "unavailable"
+}
+```
+
+La réponse ne contient ni identifiants, ni hôte, ni détail d'exception.
 
 ## 10. Règles transverses
 

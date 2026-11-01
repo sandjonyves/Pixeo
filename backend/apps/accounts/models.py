@@ -10,6 +10,7 @@ from __future__ import annotations
 import uuid
 
 from django.contrib.auth.models import AbstractUser, BaseUserManager
+from django.core.exceptions import ValidationError
 from django.db import models
 from django.utils.translation import gettext_lazy as _
 
@@ -53,6 +54,11 @@ class UserManager(BaseUserManager):
         extra_fields.setdefault("is_staff", False)
         extra_fields.setdefault("is_superuser", False)
         return self._create_user(email, password, **extra_fields)
+
+    def get_by_natural_key(self, username: str):
+        """Résout un utilisateur par e-mail, sans tenir compte de la casse."""
+        email = self.normalize_email(username or "").lower()
+        return self.get(**{self.model.USERNAME_FIELD: email})
 
     def create_superuser(
         self, email: str, password: str | None = None, **extra_fields
@@ -132,6 +138,19 @@ class User(AbstractUser):
                 self.branding_username
             )
         super().clean_fields(exclude=excluded)
+
+    def clean(self):
+        """Préserve l'invariant rôle administrateur / superutilisateur."""
+        super().clean()
+        if self.is_superuser and self.role != UserRole.PLATFORM_ADMIN:
+            raise ValidationError(
+                {
+                    "role": _(
+                        "Un superutilisateur doit avoir "
+                        "role=platform_admin."
+                    )
+                }
+            )
 
     def save(self, *args, **kwargs):
         """Garantit la normalisation même en cas d'écriture ORM directe."""

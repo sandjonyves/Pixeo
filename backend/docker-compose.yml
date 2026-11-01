@@ -1,0 +1,30 @@
+name: pixeo
+
+services:
+  postgres:
+    image: postgres:17.6-alpine
+    container_name: pixeo-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-pixeo}
+      POSTGRES_USER: ${POSTGRES_USER:-pixeo}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in backend/.env}
+    ports:
+      # PostgreSQL reste accessible uniquement depuis la machine hôte.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pixeo_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  pixeo_postgres_data:
+    name: pixeo_postgres_data

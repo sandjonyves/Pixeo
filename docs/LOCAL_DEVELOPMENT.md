@@ -1,8 +1,9 @@
 # Pixeo — Développement local et sous-domaines
 
-> **Statut : lot A2.** L'environnement Python, le projet Django, les settings par
-> environnement et le modèle utilisateur custom sont en place. Aucune migration
-> n'a encore été créée ou exécutée.
+> **Statut : lot A3.** PostgreSQL 17.6 est disponible via Docker Compose, la
+> migration initiale `accounts.0001_initial` est appliquée, Django Admin gère le
+> modèle utilisateur et le health check vérifie la base. Aucun endpoint métier ni
+> authentification JWT n'est encore exposé.
 
 ## 1. Prérequis
 
@@ -12,8 +13,10 @@
 | pip | 26.2.2 (dans `backend/.venv`) |
 | Node.js | selon le frontend existant |
 | pnpm | selon `package.json` |
-| PostgreSQL | production ; SQLite accepté en développement |
-| Redis | optionnel en A2, requis pour cache/Celery/rate limiting distribué |
+| PostgreSQL | 17.6 via Docker Compose (développement et production) |
+| Docker | Docker Engine + plugin Compose v2 |
+| SQLite | tests unitaires isolés en mémoire uniquement |
+| Redis | optionnel en A3, requis pour cache/Celery/rate limiting distribué |
 
 ## 2. Environnement Python
 
@@ -31,15 +34,19 @@ Configuration locale :
 
 ```bash
 cp .env.example .env
-# adapter les valeurs, notamment DJANGO_SECRET_KEY
+# adapter DJANGO_SECRET_KEY, POSTGRES_PASSWORD et DATABASE_URL
 ```
 
-Ne jamais committer `backend/.env`.
+Générer un mot de passe PostgreSQL fort, puis reporter la même valeur dans
+`POSTGRES_PASSWORD` et dans l'URL `DATABASE_URL`. Ne jamais committer
+`backend/.env`.
 
-Vérification et démarrage :
+Vérification et démarrage (démarrer PostgreSQL et appliquer les migrations au
+préalable, voir section 6) :
 
 ```bash
 python manage.py check
+python manage.py migrate
 python manage.py runserver 0.0.0.0:8000
 ```
 
@@ -113,7 +120,7 @@ valider le multi-tenant, les cookies et les URLs publiques.
 - Frontend : `app.lvh.me:3000`, API : `api.lvh.me:8000` → **cross-origin** mais
   **same-site** (même domaine `lvh.me`).
 - Les requêtes API utilisent `credentials: "include"`.
-- Le refresh token est un cookie `HttpOnly`. En A2, les cookies restent host-only ;
+- Le refresh token est un cookie `HttpOnly`. En A3, les cookies restent host-only ;
   aucun domaine global `.lvh.me` ou `.pixeo.com` n'est imposé.
 - La stratégie inter-sous-domaines (partage éventuel des cookies) sera décidée et
   testée aux lots C2/C3.
@@ -127,19 +134,97 @@ valider le multi-tenant, les cookies et les URLs publiques.
 |---------|------------|
 | Next.js | 3000 |
 | Django / DRF | 8000 |
-| PostgreSQL | 5432 |
+| PostgreSQL | 5432 (`POSTGRES_PORT`, configurable) |
 | Redis | 6379 |
 
-## 6. Base de données locale
+## 6. PostgreSQL local
 
-A2 ne configure pas PostgreSQL et ne crée aucune migration.
+Le service PostgreSQL est défini dans `backend/docker-compose.yml` :
 
-- Développement immédiat : `DATABASE_URL=sqlite:///db.sqlite3`.
-- Cible production : PostgreSQL via `DATABASE_URL`.
-- Le modèle utilisateur custom est défini, mais la première migration sera créée
-  en A3 après validation.
-- Les tests utilisent une base SQLite temporaire isolée avec
-  `pytest-django --no-migrations` (syncdb, aucun fichier de migration exécuté).
+- image stable `postgres:17.6-alpine` ;
+- base `pixeo`, utilisateur `pixeo` ;
+- mot de passe lu depuis `POSTGRES_PASSWORD` ;
+- port local configurable via `POSTGRES_PORT` (5432 par défaut), exposé
+  uniquement sur `127.0.0.1` ;
+- volume persistant `pixeo_postgres_data` ;
+- healthcheck `pg_isready` et redémarrage `unless-stopped`.
+
+Depuis `backend/` :
+
+```bash
+# Démarrer
+docker compose up -d
+
+# Attendre le healthcheck
+docker compose ps
+
+# Vérifier PostgreSQL
+docker compose exec postgres pg_isready -U pixeo -d pixeo
+
+# Logs
+docker compose logs -f postgres
+
+# Arrêt / redémarrage sans perte de données
+docker compose stop postgres
+docker compose start postgres
+```
+
+**Ne jamais exécuter `docker compose down -v`** sans autorisation explicite :
+cette commande supprime le volume et toutes les données locales.
+
+Django se connecte avec `DATABASE_URL`, par exemple :
+
+```dotenv
+POSTGRES_DB=pixeo
+POSTGRES_USER=pixeo
+POSTGRES_PASSWORD=<mot-de-passe-fort>
+POSTGRES_PORT=5432
+DATABASE_URL=postgresql://pixeo:<mot-de-passe-fort>@127.0.0.1:5432/pixeo
+DATABASE_CONN_MAX_AGE=60
+```
+
+Les connexions persistantes utilisent `CONN_HEALTH_CHECKS` lorsque
+`DATABASE_CONN_MAX_AGE` est supérieur à zéro.
+
+### Migrations
+
+```bash
+cd backend
+source .venv/bin/activate
+
+python manage.py check
+python manage.py makemigrations --check --dry-run
+python manage.py migrate
+python manage.py showmigrations
+```
+
+La migration initiale `accounts.0001_initial` crée `accounts_user` avec une clé
+primaire UUID et les contraintes d'unicité sur `email` et `branding_username`.
+Elle est versionnée dans Git.
+
+### Superutilisateur et admin
+
+```bash
+python manage.py createsuperuser
+```
+
+La commande demande l'e-mail, le `branding_username` et le mot de passe. Le
+compte est créé avec `is_staff=True`, `is_superuser=True` et
+`role=platform_admin`. Le mot de passe est hashé et ne doit jamais être placé
+dans un fichier versionné.
+
+Django Admin : `http://localhost:8000/admin/`.
+
+### Health endpoint
+
+```bash
+curl -i http://localhost:8000/api/v1/health/
+```
+
+- HTTP 200 : `{"ok": true, "service": "pixeo", "database": "available"}` ;
+- HTTP 503 : `{"ok": false, "service": "pixeo", "database": "unavailable"}`.
+
+La réponse n'expose aucun identifiant ni détail d'exception.
 
 ## 7. Vérifications rapides
 
@@ -148,10 +233,22 @@ A2 ne configure pas PostgreSQL et ne crée aucune migration.
 backend/.venv/bin/python --version
 backend/.venv/bin/pip check
 
-# Django et tests
+# PostgreSQL
 cd backend
+docker compose ps
+docker compose exec postgres pg_isready -U pixeo -d pixeo
+
+# Django, migrations et tests
 .venv/bin/python manage.py check
+.venv/bin/python manage.py makemigrations --check --dry-run
+.venv/bin/python manage.py showmigrations
 .venv/bin/python -m pytest -q
+
+# Suite avec migrations réellement appliquées à la base de test
+.venv/bin/python -m pytest -q -o addopts='-ra --strict-markers'
+
+# Tests unitaires SQLite en mémoire
+DATABASE_URL='sqlite:///:memory:' .venv/bin/python -m pytest -q
 
 # Le venv et le fichier .env ne doivent pas être suivis par Git
 git check-ignore -v backend/.venv backend/.env

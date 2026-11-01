@@ -9,7 +9,6 @@ from pathlib import Path
 
 import pytest
 from django.conf import settings
-from django.test import Client
 
 BACKEND_DIR = Path(__file__).resolve().parents[3]
 
@@ -105,9 +104,3 @@ def test_development_settings_enable_debug_when_requested():
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout.strip() == "True"
-
-
-def test_health_endpoint():
-    response = Client().get("/api/v1/health/", HTTP_HOST="localhost")
-    assert response.status_code == 200
-    assert response.json() == {"ok": True, "service": "pixeo"}

@@ -1,10 +1,10 @@
 # Pixeo — Architecture cible
 
-> **Statut : référence validée ; fondation A2 réalisée, en attente de validation.**
-> La fondation Django et le modèle utilisateur custom sont en place. Les modèles
-> métier, les migrations et les endpoints seront ajoutés dans les lots suivants.
-> Ce document décrit la cible Django/DRF validée ; il ne remplace pas
-> `DEVELOPMENT_PROGRESS.md`, qui suit l'avancement réel.
+> **Statut : référence validée ; fondation A3 réalisée.**
+> PostgreSQL, la migration initiale `accounts`, Django Admin et le health check
+> base sont en place. Les modèles métier et les endpoints seront ajoutés dans les
+> lots suivants. Ce document décrit la cible Django/DRF validée ; il ne remplace
+> pas `DEVELOPMENT_PROGRESS.md`, qui suit l'avancement réel.
 
 ## 1. Vue d'ensemble
 
@@ -14,7 +14,7 @@ Pixeo est un SaaS de galeries photo pour photographes.
 |--------|-------------|------|
 | Frontend | Next.js 16 (App Router), React, TypeScript | Dashboard photographe, galeries publiques, console admin |
 | API | Django 5.2 LTS + Django REST Framework | Métier, authentification, permissions, quotas |
-| Base | PostgreSQL (production), SQLite (développement) | Données relationnelles |
+| Base | PostgreSQL 17.6 (développement et production), SQLite en mémoire (tests) | Données relationnelles |
 | Cache / files | Redis + Celery | Cache, rate limiting, tâches asynchrones |
 | Fichiers | Stockage local (dev) / S3 ou Cloudflare R2 (prod) | Originaux et dérivés |
 | Reverse proxy | Nginx ou équivalent | TLS, sous-domaines, headers |
@@ -83,7 +83,7 @@ Règles :
 - Les permissions sont explicites et testées.
 - Les opérations sensibles utilisent `transaction.atomic()`.
 
-### Structure backend en place (A2)
+### Structure backend en place (A3)
 
 ```text
 backend/
@@ -93,14 +93,20 @@ backend/
 │   │   ├── development.py    # local, DEBUG et origines lvh.me
 │   │   └── production.py     # garde-fous PostgreSQL, HTTPS, secrets
 │   ├── urls.py               # admin, health, schéma OpenAPI
-│   ├── views.py              # health check technique
+│   ├── views.py              # health check Django + PostgreSQL
+│   ├── tests/                # tests du health check
 │   ├── asgi.py
 │   └── wsgi.py
 ├── apps/
 │   └── accounts/
 │       ├── models.py         # User, UserManager, rôles, statuts
 │       ├── validators.py     # branding_username
+│       ├── admin.py          # Django Admin User
+│       ├── forms.py          # formulaires admin sécurisés
+│       ├── migrations/
+│       │   └── 0001_initial.py
 │       └── tests/
+├── docker-compose.yml        # PostgreSQL 17.6 local
 ├── manage.py
 ├── requirements.txt
 ├── requirements-dev.txt
@@ -116,11 +122,21 @@ Principes appliqués :
   viennent de l'environnement.
 - La production refuse `DEBUG=True`, SQLite, l'absence de `ALLOWED_HOSTS`, de
   `CSRF_TRUSTED_ORIGINS` et de cache Redis.
+- PostgreSQL 17.6 est fourni en local par `backend/docker-compose.yml`, avec un
+  volume persistant et un healthcheck. La migration initiale `accounts` est
+  versionnée et appliquée ; les migrations font partie du code source.
 - CORS et CSRF sont configurés séparément. Aucun wildcard CORS global n'est activé.
-- Les cookies restent host-only en A2. La stratégie inter-sous-domaines sera
+- Les cookies restent host-only en A3. La stratégie inter-sous-domaines sera
   décidée et testée aux lots C2/C3 ; aucun domaine global `.pixeo.com` n'est imposé.
 - Argon2 est le hasher privilégié ; SimpleJWT est configuré mais aucun endpoint
   d'authentification n'est encore exposé.
+- Django Admin expose le modèle `User` avec recherche, filtres rôle/statut,
+  formulaire de création sécurisé et hash de mot de passe en lecture seule.
+- `User.clean()` impose qu'un superutilisateur conserve
+  `role=platform_admin` ; les formulaires admin utilisent `full_clean()` et ne
+  permettent donc pas de contourner cet invariant.
+- Le health check `/api/v1/health/` exécute `SELECT 1` et renvoie HTTP 503 lorsque
+  PostgreSQL est indisponible, sans exposer les détails de connexion.
 - La suspension métier (`is_suspended`) est distincte de `is_active` : au lot C5,
   une authentification JWT dédiée rejettera les comptes suspendus à chaque
   requête, afin qu'un access token encore valide ne contourne pas la suspension.
@@ -133,7 +149,7 @@ Les noms Python sont en `snake_case` ; les serializers exposent du `camelCase`.
 
 ### `accounts.User`
 
-Utilisateur custom défini **avant la première migration**. Le modèle A2 étend
+Utilisateur custom défini **avant la première migration**. Le modèle `User` étend
 `AbstractUser`, mais remplace le `username` Django par l'e-mail comme identifiant
 de connexion (`USERNAME_FIELD = "email"`).
 
@@ -165,14 +181,22 @@ Règles de `branding_username` :
 - normalisation appliquée par `clean_fields()` et `save()`, donc à la création
   comme à la modification ;
 - validation explicite via `full_clean()` dans le manager de création ; les
-  serializers C5 déclencheront la validation des modifications.
+  serializers C5 déclencheront la validation des modifications ;
+- résolution d'authentification par e-mail insensible à la casse via
+  `UserManager.get_by_natural_key()`.
 
 **Pas de champ `plan` sur `User`.** Le plan actif est porté par `Subscription`.
-`storage_used_bytes` n'est pas créé en A2 ; il sera ajouté avec la logique de
+`storage_used_bytes` n'est pas créé en A3 ; il sera ajouté avec la logique de
 quota, sans dupliquer le plan.
 
-Aucune migration n'est créée ni exécutée en A2. La première migration `accounts`
-sera générée en A3, avant les modèles métier.
+La migration initiale `accounts.0001_initial` est versionnée et appliquée sur
+PostgreSQL. Elle crée `accounts_user` avec la clé primaire UUID et les
+contraintes `UNIQUE (email)` et `UNIQUE (branding_username)`. Aucun modèle métier
+n'est créé en A3.
+
+Django Admin applique les règles du modèle : le formulaire de création hash le
+mot de passe, le hash n'est jamais éditable, et `suspended_at` est maintenu en
+cohérence avec `is_suspended`.
 
 ### `billing.Plan` et `billing.Subscription`
 
@@ -275,6 +299,8 @@ Abstraction via le backend de stockage Django :
 - Réponses en `camelCase`, erreurs uniformes.
 - Pagination standard, filtres et tri explicites.
 - Documentation OpenAPI générée avec `drf-spectacular`.
+- Health check `/api/v1/health/` : vérifie PostgreSQL et renvoie HTTP 503 si la
+  base est indisponible.
 - Détail du contrat : [`API_DOCUMENTATION.md`](API_DOCUMENTATION.md).
 
 ## 8. Sécurité

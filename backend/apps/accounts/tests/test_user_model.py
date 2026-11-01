@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 from django.conf import settings
-from django.contrib.auth import get_user_model
+from django.contrib.auth import authenticate, get_user_model
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 
@@ -103,6 +103,35 @@ def test_create_superuser_sets_admin_role_and_flags():
     assert admin.role == UserRole.PLATFORM_ADMIN
 
 
+def test_authenticate_by_email_is_case_insensitive():
+    user = User.objects.create_user(
+        email="Case.User@Example.COM",
+        password="a-strong-password",
+        branding_username="case-user",
+    )
+
+    assert (
+        authenticate(username="CASE.USER@example.com", password="a-strong-password")
+        == user
+    )
+    assert authenticate(username="case.user@example.com", password="wrong") is None
+
+
+def test_superuser_has_platform_admin_permissions():
+    admin = User.objects.create_superuser(
+        email="permissions@example.com",
+        password="a-strong-password",
+        branding_username="permissions-admin",
+    )
+
+    assert admin.is_active is True
+    assert admin.is_staff is True
+    assert admin.is_superuser is True
+    assert admin.role == UserRole.PLATFORM_ADMIN
+    assert admin.has_perm("accounts.change_user") is True
+    assert admin.has_module_perms("accounts") is True
+
+
 def test_create_superuser_rejects_non_admin_role():
     with pytest.raises(ValueError):
         User.objects.create_superuser(
@@ -111,6 +140,19 @@ def test_create_superuser_rejects_non_admin_role():
             branding_username="pixeo-admin",
             role=UserRole.PHOTOGRAPHER,
         )
+
+
+def test_superuser_role_invariant_is_enforced_on_full_clean():
+    user = User(
+        email="invalid-admin@example.com",
+        branding_username="invalid-admin",
+        is_superuser=True,
+        role=UserRole.PHOTOGRAPHER,
+    )
+    user.set_password("a-strong-password")
+
+    with pytest.raises(ValidationError):
+        user.full_clean()
 
 
 def test_create_user_rejects_reserved_branding_username():
