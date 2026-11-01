@@ -1,0 +1,5 @@
+-r requirements.txt
+
+# Dépendances de développement et de test
+pytest==9.2.0
+pytest-django==4.14.0

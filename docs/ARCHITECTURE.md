@@ -1,8 +1,10 @@
 # Pixeo — Architecture cible
 
-> **Statut : référence validée, lot A1.**
-> Le backend n'est pas encore implémenté. Ce document décrit la cible Django/DRF
-> validée ; il ne remplace pas `DEVELOPMENT_PROGRESS.md`, qui suit l'avancement réel.
+> **Statut : référence validée ; fondation A2 réalisée, en attente de validation.**
+> La fondation Django et le modèle utilisateur custom sont en place. Les modèles
+> métier, les migrations et les endpoints seront ajoutés dans les lots suivants.
+> Ce document décrit la cible Django/DRF validée ; il ne remplace pas
+> `DEVELOPMENT_PROGRESS.md`, qui suit l'avancement réel.
 
 ## 1. Vue d'ensemble
 
@@ -81,28 +83,96 @@ Règles :
 - Les permissions sont explicites et testées.
 - Les opérations sensibles utilisent `transaction.atomic()`.
 
+### Structure backend en place (A2)
+
+```text
+backend/
+├── config/
+│   ├── settings/
+│   │   ├── base.py           # configuration commune
+│   │   ├── development.py    # local, DEBUG et origines lvh.me
+│   │   └── production.py     # garde-fous PostgreSQL, HTTPS, secrets
+│   ├── urls.py               # admin, health, schéma OpenAPI
+│   ├── views.py              # health check technique
+│   ├── asgi.py
+│   └── wsgi.py
+├── apps/
+│   └── accounts/
+│       ├── models.py         # User, UserManager, rôles, statuts
+│       ├── validators.py     # branding_username
+│       └── tests/
+├── manage.py
+├── requirements.txt
+├── requirements-dev.txt
+├── pytest.ini
+└── .env.example
+```
+
+Principes appliqués :
+
+- `DJANGO_SETTINGS_MODULE` sélectionne `development` ou `production` ; `manage.py`
+  utilise `development` par défaut, WSGI/ASGI utilisent `production` par défaut.
+- Aucun secret n'est codé en dur : `DJANGO_SECRET_KEY`, base, cache et stockage
+  viennent de l'environnement.
+- La production refuse `DEBUG=True`, SQLite, l'absence de `ALLOWED_HOSTS`, de
+  `CSRF_TRUSTED_ORIGINS` et de cache Redis.
+- CORS et CSRF sont configurés séparément. Aucun wildcard CORS global n'est activé.
+- Les cookies restent host-only en A2. La stratégie inter-sous-domaines sera
+  décidée et testée aux lots C2/C3 ; aucun domaine global `.pixeo.com` n'est imposé.
+- Argon2 est le hasher privilégié ; SimpleJWT est configuré mais aucun endpoint
+  d'authentification n'est encore exposé.
+- La suspension métier (`is_suspended`) est distincte de `is_active` : au lot C5,
+  une authentification JWT dédiée rejettera les comptes suspendus à chaque
+  requête, afin qu'un access token encore valide ne contourne pas la suspension.
+- Le stockage local/S3-R2 est sélectionné par `STORAGE_BACKEND`, sans impact sur
+  la logique métier.
+
 ## 4. Modèle de données cible
 
 Les noms Python sont en `snake_case` ; les serializers exposent du `camelCase`.
 
 ### `accounts.User`
 
-Utilisateur custom créé **avant la première migration**.
+Utilisateur custom défini **avant la première migration**. Le modèle A2 étend
+`AbstractUser`, mais remplace le `username` Django par l'e-mail comme identifiant
+de connexion (`USERNAME_FIELD = "email"`).
 
 | Champ | Type | Notes |
 |-------|------|-------|
 | `id` | UUID | PK |
-| `email` | email unique | Identifiant de connexion |
-| `name` | char | Nom affiché |
-| `initials` | char | Dérivé, stocké pour l'UI |
+| `email` | email unique | Identifiant de connexion, normalisé en minuscules |
+| `first_name`, `last_name` | char | Nom du photographe ; le nom affiché et les initiales sont dérivés |
+| `branding_username` | slug unique | Clé de tenant et sous-domaine, 1–63 caractères |
 | `role` | choix | `photographer` / `platform_admin` |
-| `status` | choix | `active` / `suspended` |
-| `branding_username` | slug unique | Clé de tenant et sous-domaine |
-| `storage_used_bytes` | bigint | Agrégat cache, recalculable |
-| `is_active`, `is_staff` | bool | Compatibilité Django admin |
-| `created_at`, `updated_at` | datetime | |
+| `is_active` | bool | Compte actif/inactif Django |
+| `is_suspended` | bool | Suspension métier explicite |
+| `suspended_at` | datetime nullable | Horodatage de suspension |
+| `is_staff`, `is_superuser` | bool | Compatibilité Django admin |
+| `created_at`, `updated_at` | datetime | Dates de création et de modification |
+| `date_joined` | datetime | Champ natif `AbstractUser` conservé |
+
+`status` est une propriété dérivée (`active`, `inactive`, `suspended`), pas un
+champ dupliqué. `username` n'existe pas.
+
+Règles de `branding_username` :
+
+- normalisation en minuscules et suppression des espaces de bord avant validation ;
+- label DNS sûr : `[a-z0-9-]`, pas de tiret initial/final, longueur maximale 63 ;
+- noms réservés refusés (`app`, `admin`, `api`, `www`, `cdn`, `mail`, `static`,
+  `media`, etc.) ;
+- validateur serveur dans `apps/accounts/validators.py` et contrainte
+  `unique=True` en base ;
+- normalisation appliquée par `clean_fields()` et `save()`, donc à la création
+  comme à la modification ;
+- validation explicite via `full_clean()` dans le manager de création ; les
+  serializers C5 déclencheront la validation des modifications.
 
 **Pas de champ `plan` sur `User`.** Le plan actif est porté par `Subscription`.
+`storage_used_bytes` n'est pas créé en A2 ; il sera ajouté avec la logique de
+quota, sans dupliquer le plan.
+
+Aucune migration n'est créée ni exécutée en A2. La première migration `accounts`
+sera générée en A3, avant les modèles métier.
 
 ### `billing.Plan` et `billing.Subscription`
 

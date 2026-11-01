@@ -1,8 +1,9 @@
 # Pixeo — Contrat API
 
-> **Statut : document de conception, lot A1.**
-> Aucun endpoint n'est encore implémenté. Les chemins ci-dessous constituent la
-> cible validée et seront ajustés, le cas échéant, lors des lots backend.
+> **Statut : document de conception, lot A2.**
+> Seuls les endpoints techniques `health`, `schema` et `docs` sont implémentés.
+> Les chemins métier ci-dessous constituent la cible validée et seront ajustés,
+> le cas échéant, lors des lots backend.
 
 ## 1. Conventions générales
 
@@ -79,10 +80,16 @@ Codes d'erreur prévus : `validation_error`, `authentication_required`,
 
 Règles :
 
+- L'identifiant de connexion est l'e-mail (`User.USERNAME_FIELD = "email"`) ; le
+  modèle `User` n'a pas de champ `username`.
 - L'access token n'est jamais stocké dans `localStorage`.
 - Le refresh token est `HttpOnly`, `Secure` en production, avec rotation.
 - Le login et la réinitialisation sont rate-limités.
 - Un compte `suspended` ne peut pas se connecter.
+- Au lot C5, l'authentification JWT vérifiera `is_suspended` à **chaque requête**
+  (et pas seulement au login) : un access token encore valide ne donnera plus
+  accès à l'API dès la suspension. `is_active` reste réservé à la désactivation
+  Django ; la suspension métier est portée par `is_suspended`.
 
 ## 3. Studio (photographe authentifié)
 

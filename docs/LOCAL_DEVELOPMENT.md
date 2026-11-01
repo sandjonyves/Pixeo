@@ -1,7 +1,8 @@
 # Pixeo — Développement local et sous-domaines
 
-> **Statut : lot A1.** L'environnement Python et les dépendances sont installés.
-> Le projet Django lui-même sera créé au lot A2.
+> **Statut : lot A2.** L'environnement Python, le projet Django, les settings par
+> environnement et le modèle utilisateur custom sont en place. Aucune migration
+> n'a encore été créée ou exécutée.
 
 ## 1. Prérequis
 
@@ -12,7 +13,7 @@
 | Node.js | selon le frontend existant |
 | pnpm | selon `package.json` |
 | PostgreSQL | production ; SQLite accepté en développement |
-| Redis | optionnel en A1, requis pour cache/Celery/rate limiting distribué |
+| Redis | optionnel en A2, requis pour cache/Celery/rate limiting distribué |
 
 ## 2. Environnement Python
 
@@ -23,16 +24,27 @@ cd backend
 source .venv/bin/activate
 python --version
 pip install -r requirements.txt
+pip install -r requirements-dev.txt
 ```
 
 Configuration locale :
 
 ```bash
 cp .env.example .env
-# adapter les valeurs si nécessaire
+# adapter les valeurs, notamment DJANGO_SECRET_KEY
 ```
 
 Ne jamais committer `backend/.env`.
+
+Vérification et démarrage :
+
+```bash
+python manage.py check
+python manage.py runserver 0.0.0.0:8000
+```
+
+`manage.py` charge `config.settings.development` par défaut. Les points d'entrée
+WSGI/ASGI utilisent `config.settings.production` par défaut.
 
 ## 3. Stratégie de sous-domaines
 
@@ -61,9 +73,10 @@ PIXEO_BASE_DOMAIN=lvh.me
 PIXEO_APP_URL=http://app.lvh.me:3000
 PIXEO_ADMIN_URL=http://admin.lvh.me:3000
 PIXEO_API_URL=http://api.lvh.me:8000
-DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,.lvh.me
+DJANGO_ALLOWED_HOSTS=localhost,127.0.0.1,.lvh.me,.pixeo.localhost
 CORS_ALLOWED_ORIGINS=http://app.lvh.me:3000,http://admin.lvh.me:3000,http://yves.lvh.me:3000
-CSRF_TRUSTED_ORIGINS=http://app.lvh.me:3000,http://admin.lvh.me:3000,http://api.lvh.me:8000
+CORS_ALLOWED_ORIGIN_REGEXES=^http://[a-z0-9-]+\.lvh\.me:3000$
+CSRF_TRUSTED_ORIGINS=http://app.lvh.me:3000,http://admin.lvh.me:3000,http://api.lvh.me:8000,http://*.lvh.me:3000
 ```
 
 ### Option de repli : `*.pixeo.localhost`
@@ -100,10 +113,10 @@ valider le multi-tenant, les cookies et les URLs publiques.
 - Frontend : `app.lvh.me:3000`, API : `api.lvh.me:8000` → **cross-origin** mais
   **same-site** (même domaine `lvh.me`).
 - Les requêtes API utilisent `credentials: "include"`.
-- Le refresh token est un cookie `HttpOnly`. Par défaut, il est host-only sur
-  `api.lvh.me`, ce qui suffit car seul l'API le lit.
-- Si un partage de cookie entre sous-domaines devient nécessaire, définir
-  `AUTH_REFRESH_COOKIE_DOMAIN=.lvh.me` (à valider dans le lot auth).
+- Le refresh token est un cookie `HttpOnly`. En A2, les cookies restent host-only ;
+  aucun domaine global `.lvh.me` ou `.pixeo.com` n'est imposé.
+- La stratégie inter-sous-domaines (partage éventuel des cookies) sera décidée et
+  testée aux lots C2/C3.
 - En local : `AUTH_REFRESH_COOKIE_SECURE=False`, `CSRF_COOKIE_SECURE=False`,
   `SECURE_SSL_REDIRECT=False`.
 - En production : HTTPS obligatoire, cookies `Secure`, HSTS.
@@ -119,12 +132,14 @@ valider le multi-tenant, les cookies et les URLs publiques.
 
 ## 6. Base de données locale
 
-A1 ne configure pas PostgreSQL et ne crée aucune migration.
+A2 ne configure pas PostgreSQL et ne crée aucune migration.
 
 - Développement immédiat : `DATABASE_URL=sqlite:///db.sqlite3`.
 - Cible production : PostgreSQL via `DATABASE_URL`.
-- Le projet Django et les modèles seront créés au lot A2 ; la première migration
-  viendra après validation du modèle utilisateur custom.
+- Le modèle utilisateur custom est défini, mais la première migration sera créée
+  en A3 après validation.
+- Les tests utilisent une base SQLite temporaire isolée avec
+  `pytest-django --no-migrations` (syncdb, aucun fichier de migration exécuté).
 
 ## 7. Vérifications rapides
 
@@ -132,6 +147,11 @@ A1 ne configure pas PostgreSQL et ne crée aucune migration.
 # Venv et dépendances
 backend/.venv/bin/python --version
 backend/.venv/bin/pip check
+
+# Django et tests
+cd backend
+.venv/bin/python manage.py check
+.venv/bin/python -m pytest -q
 
 # Le venv et le fichier .env ne doivent pas être suivis par Git
 git check-ignore -v backend/.venv backend/.env
