@@ -1,9 +1,10 @@
 # Pixeo — Développement local et sous-domaines
 
-> **Statut : lot A3.** PostgreSQL 17.6 est disponible via Docker Compose, la
+> **Statut : lot A4.** PostgreSQL 17.6 est disponible via Docker Compose, la
 > migration initiale `accounts.0001_initial` est appliquée, Django Admin gère le
-> modèle utilisateur et le health check vérifie la base. Aucun endpoint métier ni
-> authentification JWT n'est encore exposé.
+> modèle utilisateur, le health check vérifie la base et la fondation API REST
+> (`/api/v1/`, erreurs, pagination, camelCase, OpenAPI) est en place. Aucun
+> endpoint métier ni authentification JWT n'est encore exposé.
 
 ## 1. Prérequis
 
@@ -225,6 +226,22 @@ curl -i http://localhost:8000/api/v1/health/
 - HTTP 503 : `{"ok": false, "service": "pixeo", "database": "unavailable"}`.
 
 La réponse n'expose aucun identifiant ni détail d'exception.
+
+### Documentation et racine API
+
+En développement, la documentation OpenAPI est librement accessible :
+
+```bash
+curl -i http://localhost:8000/api/v1/
+curl -s http://localhost:8000/api/v1/schema/?format=json | head
+```
+
+- Swagger UI : <http://localhost:8000/api/v1/docs/>
+- ReDoc : <http://localhost:8000/api/v1/redoc/>
+
+En production, ces trois routes de documentation sont réservées aux
+administrateurs authentifiés via la session Django. Le health check reste
+disponible publiquement pour les sondes d'infrastructure.
 
 ## 7. Vérifications rapides
 

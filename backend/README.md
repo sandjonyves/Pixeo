@@ -1,9 +1,12 @@
 # Pixeo — Backend Django
 
-> **Statut : lot A3.** PostgreSQL 17.6 est disponible via Docker Compose, la
+> **Statut : lot A4.** PostgreSQL 17.6 est disponible via Docker Compose, la
 > migration initiale `accounts.0001_initial` est versionnée et appliquée, Django
 > Admin gère le modèle utilisateur Pixeo et le health check vérifie réellement la
-> base. Aucun endpoint métier ni authentification JWT n'est encore exposé.
+> base. La fondation API REST est en place : versionnement `/api/v1/`, enveloppes
+> de réponse, erreurs centralisées, pagination, permissions de base, camelCase et
+> documentation OpenAPI. Aucun endpoint métier ni authentification JWT n'est
+> encore exposé.
 
 ## 1. Prérequis
 
@@ -15,7 +18,7 @@
 | Docker | Docker Engine + plugin Compose v2 |
 | Base de développement | PostgreSQL (`backend/docker-compose.yml`) |
 | Base de production | PostgreSQL via `DATABASE_URL` |
-| Redis | Optionnel en A3 ; requis pour cache/Celery/rate limiting distribué |
+| Redis | Optionnel en A4 ; requis pour cache/Celery/rate limiting distribué |
 
 SQLite reste utilisable uniquement pour des tests unitaires isolés en mémoire.
 
@@ -147,7 +150,59 @@ lorsqu'un administrateur active ou retire la suspension. Un superutilisateur doi
 conserver `role=platform_admin` : le formulaire admin refuse toute combinaison
 contraire via `full_clean()`.
 
-## 6. Health endpoint
+## 6. Fondation API REST (A4)
+
+L'API publique est versionnée sous `/api/v1/`. Le routeur DRF est défini dans
+`apps/api/urls.py` ; les futurs ViewSets y seront enregistrés.
+
+### Enveloppes
+
+Succès :
+
+```json
+{
+  "ok": true,
+  "data": {}
+}
+```
+
+Erreur :
+
+```json
+{
+  "ok": false,
+  "error": "Les données fournies sont invalides.",
+  "code": "VALIDATION_ERROR",
+  "details": {
+    "fieldName": ["Message"]
+  }
+}
+```
+
+Les codes sont stables et en majuscules. Les erreurs 400, 401, 403, 404, 405,
+429 et 500 sont normalisées par `apps/api/exceptions.py`. Les erreurs internes
+ne renvoient ni trace Python, ni secret, ni détail base de données.
+
+### Pagination et camelCase
+
+Les listes acceptent `page` et `page_size` (20 par défaut, 100 maximum). La
+réponse contient `items`, `total`, `page` et `pageSize`.
+
+Les serializers métier doivent hériter de `PixeoSerializer` ou
+`PixeoModelSerializer`. Ils convertissent récursivement les clés en camelCase à
+l'entrée et à la sortie, y compris dans les structures imbriquées et les erreurs
+de validation.
+
+### Permissions
+
+- `IsPhotographer` : compte photographe authentifié ;
+- `IsPlatformAdmin` : administrateur plateforme ;
+- `AllowAny` : vue publique explicitement déclarée.
+
+La permission par défaut reste `IsAuthenticated`. L'isolation multi-tenant sera
+ajoutée dans les lots métier.
+
+## 7. Health endpoint
 
 | Méthode | URL | Rôle |
 |---------|-----|------|
@@ -175,7 +230,7 @@ Réponse lorsque la base est indisponible (HTTP 503) :
 
 La réponse n'expose ni identifiants, ni hôte, ni détail d'exception.
 
-## 7. Variables d'environnement principales
+## 8. Variables d'environnement principales
 
 | Variable | Rôle |
 |----------|------|
@@ -202,7 +257,7 @@ La réponse n'expose ni identifiants, ni hôte, ni détail d'exception.
 La production refuse notamment `DEBUG=True`, SQLite, l'absence de
 `ALLOWED_HOSTS`, de `CSRF_TRUSTED_ORIGINS` et de cache Redis.
 
-## 8. Tests et vérifications
+## 9. Tests et vérifications
 
 ```bash
 cd backend
@@ -210,6 +265,9 @@ source .venv/bin/activate
 
 # Tests d'intégration sur PostgreSQL (base de test créée par pytest)
 pytest -q
+
+# Tests ciblés de la fondation API
+pytest apps/api/tests -q
 
 # Même suite avec application des migrations dans la base de test
 pytest -q -o addopts='-ra --strict-markers'
@@ -222,6 +280,9 @@ python -m pip check
 python manage.py check
 python manage.py makemigrations --check --dry-run
 python manage.py showmigrations
+
+# Validation du schéma OpenAPI
+python manage.py spectacular --validate --file /tmp/pixeo-openapi.yaml
 ```
 
 `pytest.ini` active `--no-migrations` pour les exécutions rapides : la base de
@@ -234,14 +295,19 @@ Pour la vérification production, fournir au minimum `DJANGO_SECRET_KEY`,
 `DJANGO_ALLOWED_HOSTS`, `DATABASE_URL` PostgreSQL, `CACHE_URL`,
 `CORS_ALLOWED_ORIGINS`/`CORS_ALLOWED_ORIGIN_REGEXES` et `CSRF_TRUSTED_ORIGINS`.
 
-## 9. Endpoints techniques A3
+## 10. Endpoints techniques A4
 
 | Méthode | URL | Rôle |
 |---------|-----|------|
+| GET | `/api/v1/` | Racine versionnée, enveloppe de succès |
 | GET | `/api/v1/health/` | Health check Django + PostgreSQL |
-| GET | `/api/v1/schema/` | Schéma OpenAPI |
+| GET | `/api/v1/schema/` | Schéma OpenAPI (`?format=json` pour JSON) |
 | GET | `/api/v1/docs/` | Documentation Swagger UI |
+| GET | `/api/v1/redoc/` | Documentation ReDoc |
 | — | `/admin/` | Django Admin du modèle `User` |
+
+La documentation OpenAPI est publique en développement et réservée aux
+administrateurs authentifiés par session Django en production.
 
 Aucun endpoint d'inscription, de connexion JWT, de galerie ou de paiement
 n'existe encore.

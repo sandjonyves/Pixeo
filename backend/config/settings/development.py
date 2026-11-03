@@ -54,3 +54,8 @@ LOG_LEVEL = env("DJANGO_LOG_LEVEL", default="DEBUG")  # noqa: F405
 LOGGING["root"]["level"] = LOG_LEVEL  # noqa: F405
 LOGGING["loggers"]["django"]["level"] = LOG_LEVEL  # noqa: F405
 LOGGING["loggers"]["pixeo"]["level"] = LOG_LEVEL  # noqa: F405
+
+# La documentation OpenAPI est librement consultable en développement.
+SPECTACULAR_SETTINGS["SERVE_PERMISSIONS"] = [  # noqa: F405
+    "rest_framework.permissions.AllowAny",
+]

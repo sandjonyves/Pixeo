@@ -93,6 +93,12 @@ STORAGES["staticfiles"] = {  # noqa: F405
     "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",
 }
 
+# La documentation OpenAPI reste réservée aux administrateurs authentifiés
+# via la session Django en production.
+SPECTACULAR_SETTINGS["SERVE_PERMISSIONS"] = [  # noqa: F405
+    "rest_framework.permissions.IsAdminUser",
+]
+
 PIXEO_BASE_DOMAIN = env("PIXEO_BASE_DOMAIN", default="pixeo.com")  # noqa: F405
 PIXEO_PUBLIC_SCHEME = env("PIXEO_PUBLIC_SCHEME", default="https")  # noqa: F405
 PIXEO_APP_URL = env(  # noqa: F405

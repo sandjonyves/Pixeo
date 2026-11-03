@@ -1,6 +1,6 @@
 # Pixeo — Architecture cible
 
-> **Statut : référence validée ; fondation A3 réalisée.**
+> **Statut : référence validée ; fondation A4 réalisée.**
 > PostgreSQL, la migration initiale `accounts`, Django Admin et le health check
 > base sont en place. Les modèles métier et les endpoints seront ajoutés dans les
 > lots suivants. Ce document décrit la cible Django/DRF validée ; il ne remplace
@@ -74,6 +74,7 @@ Le tenant est le **photographe** (`accounts.User`). Il n'existe pas de modèle
 | `contacts` | Contacts clients et historique de partage |
 | `marketing` | Campagnes email (V1 : stockage/brouillon, pas d'envoi réel) |
 | `platform` | Administration plateforme, paramètres globaux, audit |
+| `api` | Fondations DRF : routeur versionné, enveloppes, erreurs, pagination, permissions de base, camelCase |
 | `common` | Mixins, permissions, pagination, erreurs, stockage, utilitaires |
 
 Règles :
@@ -83,28 +84,36 @@ Règles :
 - Les permissions sont explicites et testées.
 - Les opérations sensibles utilisent `transaction.atomic()`.
 
-### Structure backend en place (A3)
+### Structure backend en place (A4)
 
 ```text
 backend/
 ├── config/
 │   ├── settings/
-│   │   ├── base.py           # configuration commune
-│   │   ├── development.py    # local, DEBUG et origines lvh.me
-│   │   └── production.py     # garde-fous PostgreSQL, HTTPS, secrets
-│   ├── urls.py               # admin, health, schéma OpenAPI
+│   │   ├── base.py           # configuration commune, DRF, OpenAPI
+│   │   ├── development.py    # local, DEBUG, docs publiques
+│   │   └── production.py     # garde-fous PostgreSQL, HTTPS, docs admin
+│   ├── urls.py               # admin, health, schéma/docs, routeur versionné
 │   ├── views.py              # health check Django + PostgreSQL
 │   ├── tests/                # tests du health check
 │   ├── asgi.py
 │   └── wsgi.py
 ├── apps/
-│   └── accounts/
-│       ├── models.py         # User, UserManager, rôles, statuts
-│       ├── validators.py     # branding_username
-│       ├── admin.py          # Django Admin User
-│       ├── forms.py          # formulaires admin sécurisés
-│       ├── migrations/
-│       │   └── 0001_initial.py
+│   ├── accounts/
+│   │   ├── models.py         # User, UserManager, rôles, statuts
+│   │   ├── validators.py     # branding_username
+│   │   ├── admin.py          # Django Admin User
+│   │   ├── forms.py          # formulaires admin sécurisés
+│   │   ├── migrations/
+│   │   │   └── 0001_initial.py
+│   │   └── tests/
+│   └── api/
+│       ├── serializers.py    # PixeoSerializer, conversion camelCase
+│       ├── pagination.py     # page/page_size, enveloppe items/pageSize
+│       ├── exceptions.py     # gestion centralisée des erreurs DRF
+│       ├── permissions.py    # IsPhotographer, IsPlatformAdmin
+│       ├── views.py          # racine API versionnée
+│       ├── urls.py           # routeur DRF extensible
 │       └── tests/
 ├── docker-compose.yml        # PostgreSQL 17.6 local
 ├── manage.py
@@ -142,6 +151,19 @@ Principes appliqués :
   requête, afin qu'un access token encore valide ne contourne pas la suspension.
 - Le stockage local/S3-R2 est sélectionné par `STORAGE_BACKEND`, sans impact sur
   la logique métier.
+- L'API est versionnée par `URLPathVersioning` ; seule `v1` est autorisée. Le
+  routeur `apps.api.urls` reste volontairement vide jusqu'aux endpoints métier.
+- Les réponses de succès utilisent `{"ok": true, "data": ...}` ; les erreurs
+  utilisent `{"ok": false, "error", "code", "details"}` avec des codes stables.
+- La pagination accepte `page` et `page_size`, avec 20 éléments par défaut et
+  100 maximum ; la réponse expose `pageSize` en camelCase.
+- `PixeoSerializer` et `PixeoModelSerializer` convertissent récursivement les
+  clés en camelCase, y compris pour les erreurs de validation.
+- Les permissions de base distinguent `IsPhotographer`, `IsPlatformAdmin` et les
+  vues publiques explicites (`AllowAny`). L'isolation multi-tenant sera ajoutée
+  dans les lots métier.
+- La documentation OpenAPI est exposée via `schema`, Swagger UI et ReDoc ; elle
+  est publique en développement et réservée aux administrateurs en production.
 
 ## 4. Modèle de données cible
 
@@ -295,12 +317,19 @@ Abstraction via le backend de stockage Django :
 
 ## 7. API
 
-- Préfixe : `/api/v1/`.
-- Réponses en `camelCase`, erreurs uniformes.
-- Pagination standard, filtres et tri explicites.
-- Documentation OpenAPI générée avec `drf-spectacular`.
+- Préfixe : `/api/<version>/`, avec `v1` comme seule version autorisée en A4.
+- Réponses de succès : `{"ok": true, "data": ...}`.
+- Erreurs uniformes : `{"ok": false, "error", "code", "details"}` ; codes
+  stables, détails de validation conservés, aucune fuite interne.
+- Pagination standard : `page`, `page_size` (20 par défaut, 100 maximum), réponse
+  `items`, `total`, `page`, `pageSize`.
+- Conversion `camelCase` centralisée dans les serializers.
+- Permissions de base : `IsPhotographer`, `IsPlatformAdmin`, `AllowAny` explicite
+  pour les vues publiques.
+- Documentation OpenAPI générée avec `drf-spectacular` : `/api/v1/schema/`,
+  `/api/v1/docs/` (Swagger UI) et `/api/v1/redoc/`.
 - Health check `/api/v1/health/` : vérifie PostgreSQL et renvoie HTTP 503 si la
-  base est indisponible.
+  base est indisponible. Son format historique est conservé.
 - Détail du contrat : [`API_DOCUMENTATION.md`](API_DOCUMENTATION.md).
 
 ## 8. Sécurité

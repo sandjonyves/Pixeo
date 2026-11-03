@@ -1,11 +1,13 @@
 # Pixeo — Contrat API
 
-> **Statut : document de conception, lot A3.**
-> Seuls les endpoints techniques `health`, `schema` et `docs` sont implémentés.
-> La migration initiale, PostgreSQL et Django Admin sont en place ; aucun endpoint
-> métier ni authentification JWT n'est encore exposé. Les chemins métier
-> ci-dessous constituent la cible validée et seront ajustés, le cas échéant, lors
-> des lots backend.
+> **Statut : fondation API, lot A4.**
+> Les endpoints techniques `health`, `schema`, `docs` et `redoc` sont implémentés,
+> ainsi que le versionnement `/api/v1/`, les enveloppes de réponse, la gestion
+> centralisée des erreurs, la pagination, les permissions de base et la conversion
+> `camelCase`. La migration initiale, PostgreSQL et Django Admin restent en place.
+> Aucun endpoint métier ni authentification JWT n'est encore exposé. Les chemins
+> métier ci-dessous constituent la cible validée et seront ajustés, le cas
+> échéant, lors des lots backend.
 
 ## 1. Conventions générales
 
@@ -19,8 +21,8 @@
 | Authentification | `Authorization: Bearer <accessToken>` |
 | Refresh | Cookie HttpOnly `pixeo_refresh` (jamais accessible en JS) |
 | CSRF | `X-CSRFToken` sur les requêtes mutantes |
-| Pagination | `page`, `pageSize` ; réponse `items`, `total`, `page`, `pageSize` |
-| Documentation | OpenAPI via `drf-spectacular` (prévu) |
+| Pagination | entrée `page`, `page_size` ; réponse `items`, `total`, `page`, `pageSize` |
+| Documentation | OpenAPI via `drf-spectacular` ; Swagger UI et ReDoc |
 
 ### Enveloppe de succès
 
@@ -36,18 +38,50 @@
 ```json
 {
   "ok": false,
-  "error": "Message lisible",
-  "code": "validation_error",
+  "error": "Les données fournies sont invalides.",
+  "code": "VALIDATION_ERROR",
   "details": {
-    "field": ["Message"]
+    "fieldName": ["Message"]
   }
 }
 ```
 
-Codes d'erreur prévus : `validation_error`, `authentication_required`,
-`permission_denied`, `not_found`, `conflict`, `rate_limited`,
-`gallery_locked`, `invalid_password`, `invalid_pin`, `expired`,
-`quota_exceeded`, `not_configured`, `server_error`.
+Les codes sont stables et en majuscules. Codes transverses implémentés en A4 :
+`VALIDATION_ERROR`, `INVALID_REQUEST`, `AUTHENTICATION_REQUIRED`,
+`AUTHENTICATION_FAILED`, `PERMISSION_DENIED`, `NOT_FOUND`,
+`METHOD_NOT_ALLOWED`, `UNSUPPORTED_MEDIA_TYPE`, `RATE_LIMITED`,
+`INTERNAL_ERROR` et `API_ERROR`. Les codes métier prévus (`CONFLICT`,
+`GALLERY_LOCKED`, `INVALID_PASSWORD`, `INVALID_PIN`, `EXPIRED`,
+`QUOTA_EXCEEDED`, `NOT_CONFIGURED`) seront ajoutés avec leurs endpoints.
+
+Les détails de validation conservent les champs et les messages utiles, avec des
+clés en `camelCase`, y compris pour les structures imbriquées. Les erreurs
+internes ne renvoient jamais de trace Python, de secret ni de détail base de
+données.
+
+### Pagination
+
+Les listes paginées acceptent `page` (numéro de page, à partir de 1) et
+`page_size` (20 par défaut, 100 maximum). La réponse respecte le format :
+
+```json
+{
+  "ok": true,
+  "data": {
+    "items": [],
+    "total": 0,
+    "page": 1,
+    "pageSize": 20
+  }
+}
+```
+
+### camelCase
+
+Les modèles et les serializers Django restent en `snake_case`. Les serializers
+Pixeo convertissent les clés en `camelCase` à l'entrée et à la sortie, y compris
+pour les structures imbriquées et les erreurs de validation. Les nouveaux
+serializers doivent hériter de `PixeoSerializer` ou `PixeoModelSerializer`.
 
 ### Codes HTTP
 
@@ -64,6 +98,7 @@ Codes d'erreur prévus : `validation_error`, `authentication_required`,
 | 410 | Lien ou galerie expiré |
 | 422 | Validation métier |
 | 429 | Rate limit |
+| 500 | Erreur interne générique, sans détail sensible |
 | 503 | Base indisponible ou fonctionnalité non configurée |
 
 ## 2. Authentification
@@ -218,13 +253,24 @@ configuré.
 
 Toutes les routes admin exigent `role = platform_admin` et sont auditées.
 
-## 9. Santé et schéma
+## 9. Santé, versionnement et documentation
 
 | Méthode | Route | Description |
 |---------|-------|-------------|
+| GET | `/api/v1/` | Racine versionnée ; enveloppe de succès |
 | GET | `/api/v1/health/` | Vérifie Django et PostgreSQL (`SELECT 1`) |
-| GET | `/api/v1/schema/` | OpenAPI (prévu) |
-| GET | `/api/v1/docs/` | Documentation interactive (prévu) |
+| GET | `/api/v1/schema/` | Schéma OpenAPI (JSON avec `?format=json`) |
+| GET | `/api/v1/docs/` | Swagger UI |
+| GET | `/api/v1/redoc/` | ReDoc |
+
+Le préfixe public est `/api/<version>/`. Seule la version `v1` est autorisée en
+A4 ; une version inconnue est rejetée avec l'enveloppe d'erreur standard. Le
+endpoint de santé est conservé hors routeur pour préserver exactement son
+contrat historique.
+
+La documentation OpenAPI est librement accessible en développement. En
+production, elle est réservée aux administrateurs authentifiés via la session
+Django. Les routes métier ne sont pas documentées tant qu'elles n'existent pas.
 
 Health check disponible (HTTP 200) :
 
@@ -257,3 +303,7 @@ La réponse ne contient ni identifiants, ni hôte, ni détail d'exception.
 - Les écritures sensibles sont atomiques.
 - Les listes sont paginées ; les exports massifs seront ajoutés ultérieurement.
 - Les champs inconnus sont refusés en écriture.
+- Les erreurs DRF passent toutes par le gestionnaire central et utilisent
+  l'enveloppe standard ; aucune trace Python n'est exposée.
+- Les serializers métier héritent de `PixeoSerializer` ou
+  `PixeoModelSerializer` pour garantir le camelCase.

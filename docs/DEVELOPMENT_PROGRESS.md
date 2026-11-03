@@ -1,7 +1,7 @@
 # Pixeo — Développement backend
 
-> Dernière mise à jour : 2026-11-01
-> Lot en cours : **A3 — PostgreSQL, migrations initiales et Django Admin** (réalisé, en attente de validation)
+> Dernière mise à jour : 2026-11-03
+> Lot en cours : **A4 — Fondation de l'API REST** (réalisé, en attente de validation)
 
 ## 1. Méthode de travail
 
@@ -23,7 +23,8 @@ n'est modifié par les lots backend avant la Phase E.
 |-------|-----|-----------|--------|
 | A | **A1** | Squelette `backend/`, venv, dépendances, `.env.example`, `.gitignore`, documentation, stratégie sous-domaines, audit nommage | **Réalisé — validé** |
 | A | **A2** | Projet Django, settings, configuration, utilisateur custom | **Réalisé — validé** |
-| A | **A3** | PostgreSQL, migration initiale, superutilisateur, Django Admin, health DB | **Réalisé — en attente de validation** |
+| A | **A3** | PostgreSQL, migration initiale, superutilisateur, Django Admin, health DB | **Réalisé — validé** |
+| A | **A4** | Fondation API REST : versionnement, erreurs, pagination, camelCase, permissions, OpenAPI | **Réalisé — en attente de validation** |
 | B | — | Authentification, JWT, cookies, CSRF, permissions | Non démarré |
 | C | — | Studio, branding, homepage, plans/abonnements | Non démarré |
 | D | — | Collections, photos, stockage, accès publics, favoris/notes | Non démarré |
@@ -164,7 +165,46 @@ Les tests PostgreSQL utilisent une base de test créée et détruite par pytest
 tests. Le superutilisateur de validation est local ; son mot de passe n'est ni
 versionné ni écrit dans un fichier du dépôt.
 
-## 7. Décisions structurantes
+## 7. Lot A4 — fondation de l'API REST
+
+### Livrables
+
+| Élément | Chemin | État |
+|---------|--------|------|
+| Application API | `backend/apps/api/` | Créée |
+| Serializers camelCase | `backend/apps/api/serializers.py` | Créé |
+| Pagination | `backend/apps/api/pagination.py` | Créée |
+| Gestion des erreurs | `backend/apps/api/exceptions.py` | Créée |
+| Permissions de base | `backend/apps/api/permissions.py` | Créées |
+| Racine versionnée | `backend/apps/api/views.py`, `urls.py` | Créées |
+| Routeur versionné | `backend/config/urls.py`, `config/settings/base.py` | Configurés |
+| Documentation OpenAPI | `config/urls.py`, `SPECTACULAR_SETTINGS` | Swagger UI, ReDoc et schéma |
+| Tests API | `backend/apps/api/tests/` | Créés |
+| Documentation | `backend/README.md`, `docs/API_DOCUMENTATION.md`, `docs/ARCHITECTURE.md` | Mise à jour |
+
+Aucun endpoint métier, aucune authentification JWT, aucun modèle supplémentaire
+et aucune migration ne sont ajoutés en A4.
+
+### Vérifications réellement exécutées
+
+| Vérification | Résultat |
+|--------------|----------|
+| `pytest -q` PostgreSQL (`--no-migrations`) | **157 passed** |
+| `pytest -q -o addopts='-ra --strict-markers'` | **157 passed** |
+| `DATABASE_URL='sqlite:///:memory:' pytest -q` | **157 passed** |
+| `manage.py check` | `System check identified no issues (0 silenced).` |
+| `manage.py check --settings=config.settings.production` | `System check identified no issues (0 silenced).` |
+| `manage.py makemigrations --check --dry-run` | `No changes detected` |
+| `manage.py spectacular --validate` | Schéma OpenAPI 3.0.3 valide |
+| Versionnement `/api/v1/` | Racine et health vérifiés |
+| Documentation en production | Schéma/Swagger/ReDoc refusés (403) aux anonymes |
+| Erreurs 400/401/403/404/405/429/500 | Enveloppes et statuts vérifiés |
+| Pagination | 20 par défaut, 100 maximum, `pageSize` vérifié |
+| camelCase | Entrée, sortie, structures imbriquées et erreurs vérifiées |
+| OpenAPI | Schéma JSON, Swagger UI et ReDoc vérifiés en développement |
+| Fichiers frontend modifiés par A4 | 0 |
+
+## 8. Décisions structurantes
 
 - Nom officiel : **Pixeo**. Aucune référence à SimpleShoot.
 - Tenant = `accounts.User` via `branding_username` ; pas de modèle `Tenant`.
@@ -178,8 +218,15 @@ versionné ni écrit dans un fichier du dépôt.
 - Stockage abstrait local/S3-R2.
 - Aucun faux succès : `not_configured` ou endpoint désactivé si non configuré.
 - Python en `snake_case`, API en `camelCase`.
+- L'API est versionnée par URL (`/api/v1/`) ; seule `v1` est autorisée en A4.
+- Les erreurs utilisent des codes stables en majuscules et une enveloppe unique.
+- La pagination expose 20 éléments par défaut, 100 maximum et `pageSize`.
+- Les permissions de base sont `IsPhotographer` et `IsPlatformAdmin` ; les vues
+  publiques déclarent explicitement `AllowAny`.
+- La documentation OpenAPI est publique en développement et réservée aux
+  administrateurs en production.
 
-## 8. Problèmes rencontrés et points d'attention
+## 9. Problèmes rencontrés et points d'attention
 
 ### Problèmes résolus pendant A1
 
@@ -215,13 +262,25 @@ versionné ni écrit dans un fichier du dépôt.
 - Le niveau `DEBUG` de `backend/.env` rend les logs SQL très verbeux ; cela
   n'affecte pas les résultats et peut être réduit avec `DJANGO_LOG_LEVEL=INFO`.
 
+### Problèmes résolus pendant A4
+
+- Le versionnement `URLPathVersioning` transmet le paramètre `version` aux vues ;
+  les vues de test doivent accepter `**kwargs`, comme les futures vues métier.
+- Le health check est resté une vue Django hors routeur afin de préserver
+  exactement sa réponse historique ; il est toujours disponible sous
+  `/api/v1/health/`.
+- La conversion camelCase des erreurs de validation est effectuée dans le
+  gestionnaire global, après la validation du serializer, pour conserver les
+  messages et les champs imbriqués.
+- La documentation OpenAPI est publique en développement, mais protégée par
+  session administrateur en production ; les tests de documentation ciblent
+  l'environnement de développement.
+
 ### Points d'attention
 
 - **Travail frontend antérieur non commité** : 8 fichiers modifiés (limites de
-  galeries) ont été laissés intacts pendant A1, A2 et A3. Ils devront être
+  galeries) ont été laissés intacts pendant A1, A2, A3 et A4. Ils devront être
   commités séparément après validation.
-- Les migrations `accounts.0001_initial` et les fichiers Compose/Admin/tests A3
-  sont prêts à être commités, mais **aucun commit A3 n'a été créé**.
 - Le superutilisateur créé pour la validation A3 est local ; son mot de passe
   n'est pas versionné. Il devra être remplacé par un compte de production créé
   selon la procédure d'exploitation.
@@ -234,16 +293,16 @@ versionné ni écrit dans un fichier du dépôt.
 - Les dépendances de test (pytest, pytest-django) sont maintenant dans
   `backend/requirements-dev.txt`.
 
-## 9. Prochain lot
+## 10. Prochain lot
 
-**A4 — périmètre à valider** (non démarré) :
+**A5 — périmètre à valider** (non démarré) :
 
-- Attendre la validation explicite du rapport A3.
-- Ne pas démarrer A4, les modèles métier, l'authentification JWT ou les endpoints
+- Attendre la validation explicite du rapport A4.
+- Ne pas démarrer A5, les modèles métier, l'authentification JWT ou les endpoints
   métier avant cette validation.
 - Les lots B/C restent non démarrés.
 
-## 10. Commandes utiles
+## 11. Commandes utiles
 
 ```bash
 # Backend
@@ -269,6 +328,12 @@ python manage.py showmigrations
 pytest -q
 pytest -q -o addopts='-ra --strict-markers'
 DATABASE_URL='sqlite:///:memory:' pytest -q
+
+# API technique
+curl -i http://localhost:8000/api/v1/health/
+curl -s http://localhost:8000/api/v1/schema/?format=json | head
+# Swagger UI : http://localhost:8000/api/v1/docs/
+# ReDoc     : http://localhost:8000/api/v1/redoc/
 
 # Frontend (existant)
 pnpm dev

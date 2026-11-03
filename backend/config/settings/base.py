@@ -36,6 +36,7 @@ INSTALLED_APPS = [
     "rest_framework",
     "rest_framework_simplejwt.token_blacklist",
     "apps.accounts",
+    "apps.api",
 ]
 
 MIDDLEWARE = [
@@ -192,15 +193,22 @@ REST_FRAMEWORK = {
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
     ],
+    "DEFAULT_VERSIONING_CLASS": (
+        "rest_framework.versioning.URLPathVersioning"
+    ),
+    "DEFAULT_VERSION": "v1",
+    "ALLOWED_VERSIONS": ["v1"],
+    "VERSION_PARAM": "version",
     "DEFAULT_FILTER_BACKENDS": [
         "django_filters.rest_framework.DjangoFilterBackend",
         "rest_framework.filters.SearchFilter",
         "rest_framework.filters.OrderingFilter",
     ],
     "DEFAULT_PAGINATION_CLASS": (
-        "rest_framework.pagination.PageNumberPagination"
+        "apps.api.pagination.PixeoPageNumberPagination"
     ),
-    "PAGE_SIZE": env.int("API_PAGE_SIZE", default=24),
+    "PAGE_SIZE": 20,
+    "EXCEPTION_HANDLER": "apps.api.exceptions.pixeo_exception_handler",
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "DEFAULT_RENDERER_CLASSES": [
         "rest_framework.renderers.JSONRenderer",
@@ -248,11 +256,32 @@ AUTH_REFRESH_COOKIE_DOMAIN = (
 # ─── OpenAPI ──────────────────────────────────────────────────────────────────
 SPECTACULAR_SETTINGS = {
     "TITLE": "Pixeo API",
-    "DESCRIPTION": "API Pixeo — galeries photo multi-tenant.",
+    "DESCRIPTION": (
+        "API REST de Pixeo, versionnée sous `/api/v1/`.\n\n"
+        "Les réponses de succès utilisent l'enveloppe "
+        "`{\"ok\": true, \"data\": ...}`. Les erreurs utilisent "
+        "`{\"ok\": false, \"error\": \"...\", \"code\": \"...\", "
+        "\"details\": {...}}` avec un code stable.\n\n"
+        "Les propriétés JSON publiques sont en camelCase. La pagination "
+        "accepte `page` et `page_size` et renvoie `items`, `total`, `page` "
+        "et `pageSize`."
+    ),
     "VERSION": "1.0.0",
     "SERVE_INCLUDE_SCHEMA": False,
     "COMPONENT_SPLIT_REQUEST": True,
     "SORT_OPERATIONS": False,
+    "TAGS": [
+        {
+            "name": "Technique",
+            "description": "Endpoints techniques de la fondation API.",
+        },
+    ],
+    # La documentation est publique en développement (override dans
+    # development.py) et réservée aux administrateurs en production.
+    "SERVE_PERMISSIONS": ["rest_framework.permissions.IsAdminUser"],
+    "SERVE_AUTHENTICATION": [
+        "rest_framework.authentication.SessionAuthentication"
+    ],
 }
 
 # ─── Domaine Pixeo ────────────────────────────────────────────────────────────
