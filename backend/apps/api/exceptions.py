@@ -15,6 +15,7 @@ from typing import Any
 
 from django.core.exceptions import PermissionDenied as DjangoPermissionDenied
 from django.http import Http404
+from django.http.multipartparser import MultiPartParserError
 from rest_framework import exceptions, status
 from rest_framework.response import Response
 from rest_framework.views import exception_handler as drf_exception_handler
@@ -22,6 +23,39 @@ from rest_framework.views import exception_handler as drf_exception_handler
 from .serializers import camelize_keys
 
 logger = logging.getLogger("pixeo.api")
+
+# Codes métier portés explicitement par les exceptions d'authentification.
+# Le gestionnaire ne se base pas sur le texte interne de l'exception.
+_PIXEO_ERRORS = {
+    "invalid_credentials": (
+        "INVALID_CREDENTIALS",
+        "Adresse e-mail ou mot de passe incorrect.",
+    ),
+    "token_expired": (
+        "TOKEN_EXPIRED",
+        "La session a expiré.",
+    ),
+    "token_invalid": (
+        "TOKEN_INVALID",
+        "Le jeton est invalide.",
+    ),
+    "token_revoked": (
+        "TOKEN_REVOKED",
+        "La session a été révoquée.",
+    ),
+    "account_disabled": (
+        "ACCOUNT_DISABLED",
+        "Ce compte est désactivé.",
+    ),
+    "account_suspended": (
+        "ACCOUNT_SUSPENDED",
+        "Ce compte est suspendu.",
+    ),
+    "csrf_failed": (
+        "CSRF_FAILED",
+        "La vérification CSRF a échoué.",
+    ),
+}
 
 _ERRORS_BY_STATUS = {
     status.HTTP_400_BAD_REQUEST: (
@@ -71,6 +105,16 @@ def _error_payload(exc: Exception, response: Response) -> dict[str, Any]:
             "error": "Les données fournies sont invalides.",
             "code": "VALIDATION_ERROR",
             "details": _validation_details(response),
+        }
+
+    pixeo_code = getattr(exc, "pixeo_code", None)
+    if pixeo_code in _PIXEO_ERRORS:
+        code, message = _PIXEO_ERRORS[pixeo_code]
+        return {
+            "ok": False,
+            "error": message,
+            "code": code,
+            "details": {},
         }
 
     if isinstance(exc, exceptions.NotAuthenticated):
@@ -125,6 +169,21 @@ def pixeo_exception_handler(exc: Exception, context: dict[str, Any]) -> Response
     response = drf_exception_handler(exc, context)
 
     if response is None:
+        # Django peut lever MultiPartParserError avant que DRF ne sélectionne
+        # un parser (notamment lors de la lecture de request.POST par le
+        # contrôle CSRF). Un corps multipart malformé est une requête invalide,
+        # pas une erreur interne.
+        if isinstance(exc, MultiPartParserError):
+            return Response(
+                {
+                    "ok": False,
+                    "error": "La requête est invalide.",
+                    "code": "INVALID_REQUEST",
+                    "details": {},
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         request = context.get("request")
         logger.error(
             "Unhandled API exception (%s) on %s",

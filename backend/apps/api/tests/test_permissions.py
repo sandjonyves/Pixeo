@@ -107,3 +107,73 @@ def test_public_view_allows_anonymous_visitor():
 
     assert response.status_code == 200
     assert response.json()["ok"] is True
+
+
+def test_photographer_permission_denies_suspended_account():
+    user = _user(
+        UserRole.PHOTOGRAPHER,
+        email="photo@example.com",
+        branding_username="photo",
+    )
+    user.is_suspended = True
+    user.save(update_fields=["is_suspended"])
+
+    response = _client_for(user).get(
+        "/api/v1/photographer-only/",
+        HTTP_HOST="localhost",
+    )
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "ACCOUNT_SUSPENDED"
+
+
+def test_photographer_permission_denies_inactive_account():
+    user = _user(
+        UserRole.PHOTOGRAPHER,
+        email="photo@example.com",
+        branding_username="photo",
+    )
+    user.is_active = False
+    user.save(update_fields=["is_active"])
+
+    response = _client_for(user).get(
+        "/api/v1/photographer-only/",
+        HTTP_HOST="localhost",
+    )
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "ACCOUNT_DISABLED"
+
+
+def test_platform_admin_permission_denies_suspended_account():
+    user = _user(
+        UserRole.PLATFORM_ADMIN,
+        email="admin@example.com",
+        branding_username="admin-user",
+    )
+    user.is_suspended = True
+    user.save(update_fields=["is_suspended"])
+
+    response = _client_for(user).get(
+        "/api/v1/admin-only/",
+        HTTP_HOST="localhost",
+    )
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "ACCOUNT_SUSPENDED"
+
+
+def test_session_authentication_denies_suspended_account(client):
+    user = _user(
+        UserRole.PHOTOGRAPHER,
+        email="photo@example.com",
+        branding_username="photo",
+    )
+    client.force_login(user)
+    user.is_suspended = True
+    user.save(update_fields=["is_suspended"])
+
+    response = client.get("/api/v1/photographer-only/")
+
+    assert response.status_code == 403
+    assert response.json()["code"] == "ACCOUNT_SUSPENDED"

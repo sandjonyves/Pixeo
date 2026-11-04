@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from datetime import timedelta
 from pathlib import Path
 
 import pytest
@@ -78,6 +79,27 @@ def test_development_settings_are_loaded():
     assert settings.CORS_ALLOWED_ORIGINS
     assert settings.CORS_ALLOWED_ORIGIN_REGEXES
     assert settings.CSRF_TRUSTED_ORIGINS
+
+
+def test_auth_settings_are_centralized_and_secure():
+    assert settings.SIMPLE_JWT["ACCESS_TOKEN_LIFETIME"] == timedelta(minutes=10)
+    assert settings.SIMPLE_JWT["REFRESH_TOKEN_LIFETIME"] == timedelta(days=7)
+    assert settings.SIMPLE_JWT["ROTATE_REFRESH_TOKENS"] is True
+    assert settings.SIMPLE_JWT["BLACKLIST_AFTER_ROTATION"] is True
+    assert settings.AUTH_REFRESH_COOKIE_NAME == "pixeo_refresh"
+    assert settings.AUTH_REFRESH_COOKIE_PATH == "/api/v1/auth/"
+    assert settings.AUTH_REFRESH_COOKIE_SAMESITE == "Lax"
+    assert settings.AUTH_REFRESH_COOKIE_DOMAIN is None
+    assert settings.AUTH_REFRESH_COOKIE_SECURE is False
+    assert settings.CSRF_COOKIE_HTTPONLY is False
+    assert settings.CSRF_COOKIE_SAMESITE == "Lax"
+    assert settings.CSRF_COOKIE_DOMAIN is None
+    assert settings.CORS_ALLOW_ALL_ORIGINS is False
+    assert settings.CORS_ALLOW_CREDENTIALS is True
+    assert settings.REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"] == {
+        "auth_login": "5/min",
+        "auth_refresh": "30/min",
+    }
 
 
 def test_development_settings_enable_debug_when_requested():

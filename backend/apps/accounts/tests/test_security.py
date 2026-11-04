@@ -44,15 +44,25 @@ print(json.dumps({
     "CSRF_COOKIE_DOMAIN": settings.CSRF_COOKIE_DOMAIN,
     "SESSION_COOKIE_DOMAIN": settings.SESSION_COOKIE_DOMAIN,
     "AUTH_REFRESH_COOKIE_DOMAIN": settings.AUTH_REFRESH_COOKIE_DOMAIN,
+    "AUTH_REFRESH_COOKIE_PATH": settings.AUTH_REFRESH_COOKIE_PATH,
+    "CSRF_COOKIE_SAMESITE": settings.CSRF_COOKIE_SAMESITE,
+    "CSRF_COOKIE_HTTPONLY": settings.CSRF_COOKIE_HTTPONLY,
     "SECURE_HSTS_SECONDS": settings.SECURE_HSTS_SECONDS,
     "SECURE_PROXY_SSL_HEADER": settings.SECURE_PROXY_SSL_HEADER,
 }))
 """
 
 
-def _probe_production_settings() -> dict:
+def _probe_production_settings(
+    overrides: dict[str, str] | None = None,
+    remove: tuple[str, ...] = (),
+) -> dict:
     env = os.environ.copy()
     env.update(PRODUCTION_ENV)
+    if overrides:
+        env.update(overrides)
+    for key in remove:
+        env.pop(key, None)
     result = subprocess.run(
         [sys.executable, "-c", PROBE % "config.settings.production"],
         cwd=BACKEND_DIR,
@@ -65,10 +75,15 @@ def _probe_production_settings() -> dict:
     return json.loads(result.stdout)
 
 
-def _run_production_check(overrides: dict[str, str]):
+def _run_production_check(
+    overrides: dict[str, str],
+    remove: tuple[str, ...] = (),
+):
     env = os.environ.copy()
     env.update(PRODUCTION_ENV)
     env.update(overrides)
+    for key in remove:
+        env.pop(key, None)
     return subprocess.run(
         [
             sys.executable,
@@ -106,6 +121,7 @@ def test_development_security_settings():
     assert settings.SESSION_COOKIE_HTTPONLY is True
     assert settings.SECURE_CONTENT_TYPE_NOSNIFF is True
     assert settings.X_FRAME_OPTIONS == "DENY"
+    assert settings.LOGGING["loggers"]["django.db.backends"]["level"] == "INFO"
     assert settings.AUTH_USER_MODEL == "accounts.User"
     assert (
         settings.PASSWORD_HASHERS[0]
@@ -129,12 +145,36 @@ def test_production_settings_are_hardened():
     assert probe["CSRF_COOKIE_DOMAIN"] is None
     assert probe["SESSION_COOKIE_DOMAIN"] is None
     assert probe["AUTH_REFRESH_COOKIE_DOMAIN"] is None
+    assert probe["AUTH_REFRESH_COOKIE_PATH"] == "/api/v1/auth/"
+    assert probe["CSRF_COOKIE_SAMESITE"] == "Lax"
+    assert probe["CSRF_COOKIE_HTTPONLY"] is False
     assert probe["SECURE_HSTS_SECONDS"] > 0
     assert probe["SECURE_PROXY_SSL_HEADER"] == [
         "HTTP_X_FORWARDED_PROTO",
         "https",
     ]
     assert "api.pixeo.com" in probe["ALLOWED_HOSTS"]
+
+
+def test_production_cors_regex_is_explicit():
+    probe = _probe_production_settings(
+        {"CORS_ALLOWED_ORIGIN_REGEXES": ""},
+    )
+
+    assert probe["CORS_ALLOWED_ORIGIN_REGEXES"] == []
+    assert "https://app.pixeo.com" in probe["CORS_ALLOWED_ORIGINS"]
+
+
+def test_production_requires_explicit_cors_origins():
+    result = _run_production_check(
+        {
+            "CORS_ALLOWED_ORIGINS": "",
+            "CORS_ALLOWED_ORIGIN_REGEXES": "",
+        },
+    )
+
+    assert result.returncode != 0
+    assert "CORS" in result.stdout + result.stderr
 
 
 def test_production_rejects_debug_true():

@@ -1,10 +1,10 @@
 # Pixeo — Développement local et sous-domaines
 
-> **Statut : lot A4.** PostgreSQL 17.6 est disponible via Docker Compose, la
+> **Statut : lot A5.** PostgreSQL 17.6 est disponible via Docker Compose, la
 > migration initiale `accounts.0001_initial` est appliquée, Django Admin gère le
-> modèle utilisateur, le health check vérifie la base et la fondation API REST
-> (`/api/v1/`, erreurs, pagination, camelCase, OpenAPI) est en place. Aucun
-> endpoint métier ni authentification JWT n'est encore exposé.
+> modèle utilisateur, le health check vérifie la base et l'authentification JWT
+> (login, refresh, logout, profil, CSRF/CORS) est en place. Aucun endpoint
+> métier, d'inscription ou de paiement n'est encore exposé.
 
 ## 1. Prérequis
 
@@ -17,7 +17,7 @@
 | PostgreSQL | 17.6 via Docker Compose (développement et production) |
 | Docker | Docker Engine + plugin Compose v2 |
 | SQLite | tests unitaires isolés en mémoire uniquement |
-| Redis | optionnel en A3, requis pour cache/Celery/rate limiting distribué |
+| Redis | optionnel en local, requis pour cache/Celery/rate limiting distribué |
 
 ## 2. Environnement Python
 
@@ -121,13 +121,25 @@ valider le multi-tenant, les cookies et les URLs publiques.
 - Frontend : `app.lvh.me:3000`, API : `api.lvh.me:8000` → **cross-origin** mais
   **same-site** (même domaine `lvh.me`).
 - Les requêtes API utilisent `credentials: "include"`.
-- Le refresh token est un cookie `HttpOnly`. En A3, les cookies restent host-only ;
-  aucun domaine global `.lvh.me` ou `.pixeo.com` n'est imposé.
-- La stratégie inter-sous-domaines (partage éventuel des cookies) sera décidée et
-  testée aux lots C2/C3.
+- Le refresh token est un cookie `HttpOnly`, `SameSite=Lax`, host-only (aucun
+  `Domain` global) et limité au chemin `/api/v1/auth/`. Il n'est jamais exposé
+  dans le JSON.
+- L'access token est renvoyé dans `data.accessToken` et doit être conservé en
+  mémoire, puis envoyé via `Authorization: Bearer <token>`.
+- Le frontend obtient un jeton CSRF via `GET /api/v1/auth/csrf/`, puis l'envoie
+  dans `X-CSRFToken` pour `POST /api/v1/auth/login/`,
+  `POST /api/v1/auth/refresh/` et `POST /api/v1/auth/logout/`. Le login crée
+  une session : il est protégé contre le Login CSRF.
+- Le login n'accepte que `application/json` ; un formulaire HTML classique ne
+  peut pas créer de session.
 - En local : `AUTH_REFRESH_COOKIE_SECURE=False`, `CSRF_COOKIE_SECURE=False`,
-  `SECURE_SSL_REDIRECT=False`.
-- En production : HTTPS obligatoire, cookies `Secure`, HSTS.
+  `SECURE_SSL_REDIRECT=False`. Les durées par défaut sont 10 minutes pour
+  l'access et 7 jours pour le refresh.
+- En production : HTTPS obligatoire, cookies `Secure`, HSTS, origines CORS
+  déclarées explicitement et aucun wildcard de sous-domaines tenants.
+- Les cookies restent host-only : le frontend et l'API doivent rester same-site
+  pour que le cookie `SameSite=Lax` soit envoyé. Le cookie CSRF est lisible par
+  le middleware, mais le frontend utilise le jeton JSON, pas `document.cookie`.
 
 ## 5. Ports
 
@@ -201,7 +213,9 @@ python manage.py showmigrations
 
 La migration initiale `accounts.0001_initial` crée `accounts_user` avec une clé
 primaire UUID et les contraintes d'unicité sur `email` et `branding_username`.
-Elle est versionnée dans Git.
+Elle est versionnée dans Git. Les migrations `token_blacklist` de SimpleJWT sont
+déjà appliquées et permettent la rotation/révocation des refresh tokens ; A5
+n'ajoute aucune migration.
 
 ### Superutilisateur et admin
 
@@ -243,6 +257,41 @@ En production, ces trois routes de documentation sont réservées aux
 administrateurs authentifiés via la session Django. Le health check reste
 disponible publiquement pour les sondes d'infrastructure.
 
+### Tester l'authentification en local
+
+Les placeholders `<email>`, `<password>` et `<csrfToken>` sont à remplacer. Le
+fichier `cookies.txt` est local et ne doit pas être versionné.
+
+```bash
+# 1. Obtenir un jeton CSRF et le cookie CSRF
+curl -s -c cookies.txt http://api.lvh.me:8000/api/v1/auth/csrf/
+
+# 2. Se connecter (CSRF + JSON obligatoires ; refresh dans cookies.txt)
+curl -s -c cookies.txt -b cookies.txt \
+  -H 'Content-Type: application/json' \
+  -H 'X-CSRFToken: <csrfToken>' \
+  -d '{"email":"<email>","password":"<password>"}' \
+  http://api.lvh.me:8000/api/v1/auth/login/
+
+# 3. Utiliser l'accessToken retourné
+curl -s -H 'Authorization: Bearer <accessToken>' \
+  http://api.lvh.me:8000/api/v1/auth/me/
+
+# 4. Renouveler l'access token (le refresh est tourné)
+curl -s -c cookies.txt -b cookies.txt -X POST \
+  -H 'X-CSRFToken: <csrfToken>' \
+  http://api.lvh.me:8000/api/v1/auth/refresh/
+
+# 5. Se déconnecter et supprimer le cookie
+curl -s -c cookies.txt -b cookies.txt -X POST \
+  -H 'X-CSRFToken: <csrfToken>' \
+  http://api.lvh.me:8000/api/v1/auth/logout/
+```
+
+Sans `X-CSRFToken`, le login, le refresh et le logout renvoient `CSRF_FAILED`.
+Avec un jeton CSRF valide mais sans cookie de refresh, le refresh renvoie
+`TOKEN_INVALID` et le logout reste idempotent.
+
 ## 7. Vérifications rapides
 
 ```bash
@@ -262,10 +311,13 @@ docker compose exec postgres pg_isready -U pixeo -d pixeo
 .venv/bin/python -m pytest -q
 
 # Suite avec migrations réellement appliquées à la base de test
-.venv/bin/python -m pytest -q -o addopts='-ra --strict-markers'
+.venv/bin/python -m pytest -q -o addopts=''
 
 # Tests unitaires SQLite en mémoire
 DATABASE_URL='sqlite:///:memory:' .venv/bin/python -m pytest -q
+
+# Validation OpenAPI
+.venv/bin/python manage.py spectacular --validate --file /tmp/pixeo-openapi.yaml
 
 # Le venv et le fichier .env ne doivent pas être suivis par Git
 git check-ignore -v backend/.venv backend/.env

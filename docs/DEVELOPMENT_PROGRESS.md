@@ -1,7 +1,7 @@
 # Pixeo — Développement backend
 
 > Dernière mise à jour : 2026-11-03
-> Lot en cours : **A4 — Fondation de l'API REST** (réalisé, en attente de validation)
+> Lot en cours : **A5 — Authentification JWT et sessions** (réalisé, en attente de validation)
 
 ## 1. Méthode de travail
 
@@ -25,10 +25,11 @@ n'est modifié par les lots backend avant la Phase E.
 | A | **A2** | Projet Django, settings, configuration, utilisateur custom | **Réalisé — validé** |
 | A | **A3** | PostgreSQL, migration initiale, superutilisateur, Django Admin, health DB | **Réalisé — validé** |
 | A | **A4** | Fondation API REST : versionnement, erreurs, pagination, camelCase, permissions, OpenAPI | **Réalisé — en attente de validation** |
-| B | — | Authentification, JWT, cookies, CSRF, permissions | Non démarré |
-| C | — | Studio, branding, homepage, plans/abonnements | Non démarré |
-| D | — | Collections, photos, stockage, accès publics, favoris/notes | Non démarré |
-| E | — | Intégration frontend et retrait du `localStorage` | Non démarré |
+| A | **A5** | Authentification JWT, cookie refresh, rotation/blacklist, CSRF/CORS, profil courant | **Réalisé — en attente de validation** |
+| B | — | Studio, branding, homepage, plans/abonnements | Non démarré |
+| C | — | Collections, photos, stockage, accès publics, favoris/notes | Non démarré |
+| D | — | Intégration frontend et retrait du `localStorage` | Non démarré |
+| E | — | Finalisation, durcissement et mise en production | Non démarré |
 
 ## 3. Lot A1 — livrables
 
@@ -204,7 +205,82 @@ et aucune migration ne sont ajoutés en A4.
 | OpenAPI | Schéma JSON, Swagger UI et ReDoc vérifiés en développement |
 | Fichiers frontend modifiés par A4 | 0 |
 
-## 8. Décisions structurantes
+## 8. Lot A5 — authentification JWT et sessions
+
+### Livrables
+
+| Élément | Chemin | État |
+|---------|--------|------|
+| Package d'authentification | `backend/apps/accounts/auth/` | Créé |
+| Vues login/refresh/logout/me/csrf | `backend/apps/accounts/auth/views.py` | Créées |
+| Routes `/api/v1/auth/` | `backend/apps/accounts/auth/urls.py`, `apps/api/urls.py` | Créées |
+| Serializers d'auth | `backend/apps/accounts/auth/serializers.py` | Créés |
+| Services de session | `backend/apps/accounts/auth/services.py` | Créés |
+| Cookie refresh | `backend/apps/accounts/auth/cookies.py` | Créé |
+| Vérification CSRF | `backend/apps/accounts/auth/csrf.py` | Créée |
+| Protection Login CSRF + parser JSON | `backend/apps/accounts/auth/views.py` | Ajoutée à l'audit |
+| Journalisation SQL sans tokens | `backend/config/settings/base.py` | Ajoutée à l'audit |
+| Throttling | `backend/apps/accounts/auth/throttles.py` | Créé |
+| Exceptions stables | `backend/apps/accounts/auth/exceptions.py` | Créées |
+| Authentification DRF | `backend/apps/accounts/authentication.py` | Créée |
+| Extensions OpenAPI | `backend/apps/accounts/schema.py` | Créées |
+| Permissions de rôle/statut | `backend/apps/api/permissions.py` | Mises à jour |
+| Mapping des codes d'erreur | `backend/apps/api/exceptions.py` | Mis à jour |
+| Settings JWT/CSRF/CORS | `backend/config/settings/base.py`, `production.py` | Mis à jour |
+| Exemple d'environnement | `backend/.env.example` | Mis à jour |
+| Tests d'authentification | `backend/apps/accounts/tests/test_auth_*.py` | Créés |
+| Tests permissions/statut | `backend/apps/api/tests/test_permissions.py` | Complétés |
+| Documentation | `backend/README.md`, `docs/API_DOCUMENTATION.md`, `docs/ARCHITECTURE.md`, `docs/LOCAL_DEVELOPMENT.md` | Mise à jour |
+
+Aucun modèle métier, aucune inscription, aucun endpoint de galerie/photo et
+aucune migration supplémentaire ne sont ajoutés en A5. `token_blacklist` était
+déjà installé et ses migrations déjà appliquées.
+
+### Vérifications réellement exécutées
+
+| Vérification | Résultat |
+|--------------|----------|
+| `pytest -q` PostgreSQL (`--no-migrations`) | **217 passed** |
+| `pytest -q -o addopts='' --create-db` avec migrations appliquées | **217 passed** |
+| `DATABASE_URL='sqlite:///:memory:' pytest -q` | **217 passed** |
+| `python -m pip check` | `No broken requirements found.` |
+| `manage.py check` | `System check identified no issues (0 silenced).` |
+| `manage.py check --settings=config.settings.production` | `System check identified no issues (0 silenced).` |
+| `manage.py check --deploy --settings=config.settings.production` | Aucun problème avec secret fort et `SECURE_HSTS_PRELOAD=True` explicites |
+| `manage.py makemigrations --check --dry-run` | `No changes detected` |
+| `manage.py spectacular --validate` | Schéma OpenAPI 3.0.3 valide, sans warning |
+| Migrations `token_blacklist` | Déjà appliquées (13 migrations) |
+| Tests login/refresh/logout/me/csrf | Couverts |
+| Login sans CSRF / avec CSRF valide | `403 CSRF_FAILED` / `200` vérifiés |
+| Login depuis origine non autorisée | `403 CSRF_FAILED`, aucun cookie ni token |
+| Login avec Content-Type non JSON | Refusé (400/415), aucun cookie ni token |
+| Multipart malformé | `400 INVALID_REQUEST`, pas de 500 |
+| Preflight CORS login | Origine non autorisée sans `Access-Control-Allow-Origin` |
+| Rotation et réutilisation d'un ancien refresh | `TOKEN_REVOKED` vérifié |
+| Session après rejeu de R1 | R2 reste valide (pas de révocation de famille) |
+| Vérification réelle login → me → refresh → logout | 200/200/200/200, puis `401 TOKEN_REVOKED` et `403 CSRF_FAILED` |
+| CSRF absent/invalide/origine refusée | `CSRF_FAILED` vérifié |
+| Fuite de tokens dans les logs/réponses | Aucune fuite détectée ; logger SQL forcé à `INFO` |
+| CORS avec/sans origine autorisée | En-têtes vérifiés |
+| Throttling login et refresh | `RATE_LIMITED` vérifié |
+| Compte suspendu/désactivé | Refus au login, refresh et requête authentifiée |
+| Cookie de refresh | HttpOnly, path, SameSite, Secure local/production, host-only |
+| Access token dans le JSON, refresh absent | Vérifié |
+| OpenAPI | `jwtAuth` et `cookieAuth` documentés |
+| Fichiers frontend modifiés par A5 | 0 (les 8 modifications antérieures restent intactes) |
+
+### État de la base et Git
+
+- PostgreSQL local `pixeo` : 1 utilisateur (`admin@pixeo.test`,
+  `platform_admin`, superuser), 0 compte suspendu.
+- Aucun utilisateur de test persistant n'a été créé dans la base de
+  développement. La vérification HTTP réelle a utilisé un utilisateur temporaire
+  dans une transaction annulée (0 utilisateur persisté).
+- Aucune migration A5 n'est nécessaire ; `token_blacklist` est déjà appliqué.
+- A4 reste un commit local non poussé ; A5 reste non commité jusqu'à validation
+  explicite. `origin/main` pointe toujours sur A3.
+
+## 9. Décisions structurantes
 
 - Nom officiel : **Pixeo**. Aucune référence à SimpleShoot.
 - Tenant = `accounts.User` via `branding_username` ; pas de modèle `Tenant`.
@@ -218,15 +294,30 @@ et aucune migration ne sont ajoutés en A4.
 - Stockage abstrait local/S3-R2.
 - Aucun faux succès : `not_configured` ou endpoint désactivé si non configuré.
 - Python en `snake_case`, API en `camelCase`.
-- L'API est versionnée par URL (`/api/v1/`) ; seule `v1` est autorisée en A4.
+- L'API est versionnée par URL (`/api/v1/`) ; seule `v1` est autorisée en A5.
 - Les erreurs utilisent des codes stables en majuscules et une enveloppe unique.
 - La pagination expose 20 éléments par défaut, 100 maximum et `pageSize`.
 - Les permissions de base sont `IsPhotographer` et `IsPlatformAdmin` ; les vues
   publiques déclarent explicitement `AllowAny`.
 - La documentation OpenAPI est publique en développement et réservée aux
   administrateurs en production.
+- L'access token dure 10 minutes par défaut et le refresh 7 jours ; ces valeurs
+  sont configurables par environnement.
+- Le refresh token est uniquement dans un cookie HttpOnly, host-only, de chemin
+  `/api/v1/auth/`, `SameSite=Lax`, `Secure` en production.
+- Le login crée une session : il exige donc aussi CSRF, en plus du refresh et du
+  logout. Il n'accepte que `application/json`.
+- La réutilisation d'un ancien refresh est refusée (`TOKEN_REVOKED`), mais
+  SimpleJWT ne révoque pas la famille : le refresh suivant reste valide dans la
+  politique A5.
+- Le statut du compte est vérifié à la connexion, au refresh et à chaque requête
+  authentifiée. Une suspension prend effet sans attendre l'expiration du token.
+- La production n'active aucun wildcard CORS implicite : les origines doivent
+  être déclarées explicitement.
+- Un logout révoque le refresh mais pas un access token déjà émis ; sa courte
+  durée de vie limite la fenêtre résiduelle.
 
-## 9. Problèmes rencontrés et points d'attention
+## 10. Problèmes rencontrés et points d'attention
 
 ### Problèmes résolus pendant A1
 
@@ -259,8 +350,9 @@ et aucune migration ne sont ajoutés en A4.
 - Les tests rapides utilisent `--no-migrations` (syncdb). Une seconde exécution
   avec `-o addopts='-ra --strict-markers'` applique réellement les migrations à
   la base de test PostgreSQL.
-- Le niveau `DEBUG` de `backend/.env` rend les logs SQL très verbeux ; cela
-  n'affecte pas les résultats et peut être réduit avec `DJANGO_LOG_LEVEL=INFO`.
+- Le niveau `DEBUG` de `backend/.env` rend les logs applicatifs verbeux ; depuis
+  A5, le logger `django.db.backends` reste à `INFO` pour ne jamais journaliser
+  les refresh tokens stockés en base.
 
 ### Problèmes résolus pendant A4
 
@@ -276,11 +368,46 @@ et aucune migration ne sont ajoutés en A4.
   session administrateur en production ; les tests de documentation ciblent
   l'environnement de développement.
 
+### Problèmes résolus pendant A5
+
+- Le client de test DRF désactive CSRF par défaut. Les tests d'authentification
+  utilisent `APIClient(enforce_csrf_checks=True)` pour simuler réellement le
+  navigateur sur `login`, `refresh` et `logout`.
+- `drf-spectacular` ne reconnaissait pas les classes d'authentification
+  personnalisées. Des extensions `jwtAuth` et `cookieAuth` ont été ajoutées dans
+  `apps/accounts/schema.py` et chargées par `AccountsConfig.ready()`.
+- Le fichier `.env` local conservait les anciennes durées (15/14) et une regex
+  CORS de développement. Les durées locales ont été alignées sur 10/7 ; les
+  tests de production neutralisent explicitement les valeurs CORS héritées de
+  `.env` pour vérifier les garde-fous.
+- `token_blacklist` était déjà installé et migré ; aucune migration A5 n'a été
+  créée.
+- La rotation SimpleJWT blackliste l'ancien refresh avant de changer son JTI. Un
+  ancien refresh réutilisé renvoie bien `TOKEN_REVOKED`.
+- L'audit complémentaire a identifié que le login créait une session sans
+  vérification CSRF. `enforce_csrf()` est désormais appliqué au login et le
+  parser est limité à JSON ; les formulaires HTML ne peuvent plus créer de
+  session.
+- Un corps multipart malformé pouvait remonter en 500 via `request.POST` avant
+  la sélection du parser. Le gestionnaire central le convertit désormais en
+  `400 INVALID_REQUEST`, sans authentification ni cookie.
+- SimpleJWT ne fournit pas de révocation de famille. La politique A5 est
+  explicite : R1 rejoué est refusé, R2 reste valide. Aucun suivi de famille
+  complexe n'a été ajouté.
+- Les requêtes SQL peuvent contenir les refresh tokens stockés dans
+  `OutstandingToken`. Le logger `django.db.backends` est forcé à `INFO` pour ne
+  jamais journaliser ces valeurs, même quand le niveau applicatif local est
+  `DEBUG`.
+- Le cookie CSRF contient un secret masqué différent du jeton JSON. Le frontend
+  doit utiliser `data.csrfToken` et non lire `document.cookie`.
+- Un logout ne peut pas révoquer un access token déjà émis ; la durée courte de
+  l'access token est la mesure de limitation retenue.
+
 ### Points d'attention
 
 - **Travail frontend antérieur non commité** : 8 fichiers modifiés (limites de
-  galeries) ont été laissés intacts pendant A1, A2, A3 et A4. Ils devront être
-  commités séparément après validation.
+  galeries) ont été laissés intacts pendant A1, A2, A3, A4 et A5. Ils devront
+  être commités séparément après validation.
 - Le superutilisateur créé pour la validation A3 est local ; son mot de passe
   n'est pas versionné. Il devra être remplacé par un compte de production créé
   selon la procédure d'exploitation.
@@ -293,16 +420,17 @@ et aucune migration ne sont ajoutés en A4.
 - Les dépendances de test (pytest, pytest-django) sont maintenant dans
   `backend/requirements-dev.txt`.
 
-## 10. Prochain lot
+## 11. Prochain lot
 
-**A5 — périmètre à valider** (non démarré) :
+**A5 — en attente de validation explicite.**
 
-- Attendre la validation explicite du rapport A4.
-- Ne pas démarrer A5, les modèles métier, l'authentification JWT ou les endpoints
-  métier avant cette validation.
-- Les lots B/C restent non démarrés.
+- A5 est implémenté et vérifié, mais volontairement non commité.
+- Aucun lot suivant (A6, modèles métier, inscription, galeries, photos,
+  abonnements) ne doit démarrer avant validation.
+- A4 reste un commit local non poussé ; `origin/main` pointe sur A3.
+- Le commit A5 sera créé séparément après validation.
 
-## 11. Commandes utiles
+## 12. Commandes utiles
 
 ```bash
 # Backend

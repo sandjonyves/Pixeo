@@ -170,8 +170,8 @@ CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=[])
 CSRF_COOKIE_SECURE = env.bool("CSRF_COOKIE_SECURE", default=False)
 CSRF_COOKIE_HTTPONLY = False
 CSRF_COOKIE_SAMESITE = env("CSRF_COOKIE_SAMESITE", default="Lax")
-# Vide par défaut (cookie host-only). Aucun domaine global n'est imposé ;
-# la stratégie inter-sous-domaines sera décidée et testée aux lots C2/C3.
+CSRF_COOKIE_PATH = env("CSRF_COOKIE_PATH", default="/")
+# Vide par défaut (cookie host-only). Aucun domaine global n'est imposé.
 CSRF_COOKIE_DOMAIN = env("CSRF_COOKIE_DOMAIN", default=None) or None
 
 SESSION_COOKIE_SECURE = env.bool("SESSION_COOKIE_SECURE", default=False)
@@ -188,7 +188,8 @@ X_FRAME_OPTIONS = "DENY"
 # ─── Django REST Framework ────────────────────────────────────────────────────
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": [
-        "rest_framework_simplejwt.authentication.JWTAuthentication",
+        "apps.accounts.authentication.PixeoJWTAuthentication",
+        "apps.accounts.authentication.PixeoSessionAuthentication",
     ],
     "DEFAULT_PERMISSION_CLASSES": [
         "rest_framework.permissions.IsAuthenticated",
@@ -218,15 +219,19 @@ REST_FRAMEWORK = {
         "rest_framework.parsers.MultiPartParser",
         "rest_framework.parsers.FormParser",
     ],
+    "DEFAULT_THROTTLE_RATES": {
+        "auth_login": env("AUTH_LOGIN_RATE", default="5/min"),
+        "auth_refresh": env("AUTH_REFRESH_RATE", default="30/min"),
+    },
 }
 
 # ─── JWT ──────────────────────────────────────────────────────────────────────
 SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(
-        minutes=env.int("AUTH_ACCESS_TOKEN_LIFETIME_MINUTES", default=15)
+        minutes=env.int("AUTH_ACCESS_TOKEN_LIFETIME_MINUTES", default=10)
     ),
     "REFRESH_TOKEN_LIFETIME": timedelta(
-        days=env.int("AUTH_REFRESH_TOKEN_LIFETIME_DAYS", default=14)
+        days=env.int("AUTH_REFRESH_TOKEN_LIFETIME_DAYS", default=7)
     ),
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": True,
@@ -247,8 +252,11 @@ AUTH_REFRESH_COOKIE_SECURE = env.bool(
 AUTH_REFRESH_COOKIE_SAMESITE = env(
     "AUTH_REFRESH_COOKIE_SAMESITE", default="Lax"
 )
+AUTH_REFRESH_COOKIE_PATH = env(
+    "AUTH_REFRESH_COOKIE_PATH", default="/api/v1/auth/"
+)
 # Vide par défaut (cookie host-only). Aucun domaine global n'est imposé ;
-# la stratégie inter-sous-domaines sera décidée et testée aux lots C2/C3.
+# le cookie ne doit pas être partagé avec les sous-domaines tenants.
 AUTH_REFRESH_COOKIE_DOMAIN = (
     env("AUTH_REFRESH_COOKIE_DOMAIN", default=None) or None
 )
@@ -274,6 +282,12 @@ SPECTACULAR_SETTINGS = {
         {
             "name": "Technique",
             "description": "Endpoints techniques de la fondation API.",
+        },
+        {
+            "name": "Authentification",
+            "description": (
+                "Connexion, renouvellement, déconnexion, profil et jeton CSRF."
+            ),
         },
     ],
     # La documentation est publique en développement (override dans
@@ -357,6 +371,14 @@ LOGGING = {
         "django.security": {
             "handlers": ["console"],
             "level": "WARNING",
+            "propagate": False,
+        },
+        # Les requêtes SQL contiennent les refresh tokens stockés par
+        # SimpleJWT dans OutstandingToken. On ne les journalise jamais, même
+        # lorsque le niveau applicatif local est DEBUG.
+        "django.db.backends": {
+            "handlers": ["console"],
+            "level": "INFO",
             "propagate": False,
         },
         "pixeo": {

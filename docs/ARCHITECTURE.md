@@ -1,10 +1,11 @@
 # Pixeo — Architecture cible
 
-> **Statut : référence validée ; fondation A4 réalisée.**
-> PostgreSQL, la migration initiale `accounts`, Django Admin et le health check
-> base sont en place. Les modèles métier et les endpoints seront ajoutés dans les
-> lots suivants. Ce document décrit la cible Django/DRF validée ; il ne remplace
-> pas `DEVELOPMENT_PROGRESS.md`, qui suit l'avancement réel.
+> **Statut : référence validée ; fondation A4 et authentification A5 réalisées.**
+> PostgreSQL, la migration initiale `accounts`, Django Admin, le health check
+> base et les endpoints d'authentification sont en place. Les modèles métier et
+> les endpoints métier seront ajoutés dans les lots suivants. Ce document décrit
+> la cible Django/DRF validée ; il ne remplace pas
+> `DEVELOPMENT_PROGRESS.md`, qui suit l'avancement réel.
 
 ## 1. Vue d'ensemble
 
@@ -84,15 +85,15 @@ Règles :
 - Les permissions sont explicites et testées.
 - Les opérations sensibles utilisent `transaction.atomic()`.
 
-### Structure backend en place (A4)
+### Structure backend en place (A5)
 
 ```text
 backend/
 ├── config/
 │   ├── settings/
-│   │   ├── base.py           # configuration commune, DRF, OpenAPI
+│   │   ├── base.py           # configuration commune, DRF, JWT, CSRF, CORS
 │   │   ├── development.py    # local, DEBUG, docs publiques
-│   │   └── production.py     # garde-fous PostgreSQL, HTTPS, docs admin
+│   │   └── production.py     # garde-fous PostgreSQL, HTTPS, cookies, docs admin
 │   ├── urls.py               # admin, health, schéma/docs, routeur versionné
 │   ├── views.py              # health check Django + PostgreSQL
 │   ├── tests/                # tests du health check
@@ -101,9 +102,20 @@ backend/
 ├── apps/
 │   ├── accounts/
 │   │   ├── models.py         # User, UserManager, rôles, statuts
+│   │   ├── authentication.py # PixeoJWTAuthentication, PixeoSessionAuthentication
+│   │   ├── schema.py         # extensions OpenAPI JWT/session
 │   │   ├── validators.py     # branding_username
 │   │   ├── admin.py          # Django Admin User
 │   │   ├── forms.py          # formulaires admin sécurisés
+│   │   ├── auth/
+│   │   │   ├── urls.py       # routes /api/v1/auth/
+│   │   │   ├── views.py      # login, refresh, logout, me, csrf
+│   │   │   ├── serializers.py
+│   │   │   ├── services.py   # vérification, rotation, révocation
+│   │   │   ├── cookies.py    # cookie refresh HttpOnly
+│   │   │   ├── csrf.py       # vérification CSRF ciblée
+│   │   │   ├── throttles.py  # login/refresh
+│   │   │   └── exceptions.py # codes d'auth stables
 │   │   ├── migrations/
 │   │   │   └── 0001_initial.py
 │   │   └── tests/
@@ -111,9 +123,9 @@ backend/
 │       ├── serializers.py    # PixeoSerializer, conversion camelCase
 │       ├── pagination.py     # page/page_size, enveloppe items/pageSize
 │       ├── exceptions.py     # gestion centralisée des erreurs DRF
-│       ├── permissions.py    # IsPhotographer, IsPlatformAdmin
+│       ├── permissions.py    # IsPhotographer, IsPlatformAdmin, statut courant
 │       ├── views.py          # racine API versionnée
-│       ├── urls.py           # routeur DRF extensible
+│       ├── urls.py           # routeur DRF + routes auth
 │       └── tests/
 ├── docker-compose.yml        # PostgreSQL 17.6 local
 ├── manage.py
@@ -134,11 +146,19 @@ Principes appliqués :
 - PostgreSQL 17.6 est fourni en local par `backend/docker-compose.yml`, avec un
   volume persistant et un healthcheck. La migration initiale `accounts` est
   versionnée et appliquée ; les migrations font partie du code source.
-- CORS et CSRF sont configurés séparément. Aucun wildcard CORS global n'est activé.
-- Les cookies restent host-only en A3. La stratégie inter-sous-domaines sera
-  décidée et testée aux lots C2/C3 ; aucun domaine global `.pixeo.com` n'est imposé.
-- Argon2 est le hasher privilégié ; SimpleJWT est configuré mais aucun endpoint
-  d'authentification n'est encore exposé.
+- CORS et CSRF sont configurés séparément. Aucun wildcard CORS global n'est
+  activé. En production, les origines autorisées sont déclarées explicitement et
+  les sous-domaines tenants ne reçoivent pas d'accès CORS avec credentials.
+- Les cookies de refresh et CSRF restent host-only (aucun `Domain` global). Le
+  refresh est limité au chemin `/api/v1/auth/`, `SameSite=Lax`, `Secure` en
+  production. Le cookie CSRF est lisible par le frontend, qui préfère toutefois
+  le jeton JSON retourné par `/api/v1/auth/csrf/`.
+- Argon2 est le hasher privilégié. SimpleJWT fournit l'access token et le refresh
+  token ; `token_blacklist` est installé et applique la rotation/révocation.
+- `PixeoJWTAuthentication` et `PixeoSessionAuthentication` rechargent le compte
+  depuis la base à chaque requête et refusent un compte suspendu ou désactivé.
+- Le package `apps.accounts.auth` centralise les vues, serializers, cookies,
+  services de rotation, vérification CSRF, throttles et exceptions d'auth.
 - Django Admin expose le modèle `User` avec recherche, filtres rôle/statut,
   formulaire de création sécurisé et hash de mot de passe en lecture seule.
 - `User.clean()` impose qu'un superutilisateur conserve
@@ -146,13 +166,14 @@ Principes appliqués :
   permettent donc pas de contourner cet invariant.
 - Le health check `/api/v1/health/` exécute `SELECT 1` et renvoie HTTP 503 lorsque
   PostgreSQL est indisponible, sans exposer les détails de connexion.
-- La suspension métier (`is_suspended`) est distincte de `is_active` : au lot C5,
-  une authentification JWT dédiée rejettera les comptes suspendus à chaque
-  requête, afin qu'un access token encore valide ne contourne pas la suspension.
+- La suspension métier (`is_suspended`) est distincte de `is_active`. Les deux
+  statuts sont contrôlés à la connexion, au refresh et à chaque requête
+  authentifiée, afin qu'un ancien token ne contourne pas une suspension.
 - Le stockage local/S3-R2 est sélectionné par `STORAGE_BACKEND`, sans impact sur
   la logique métier.
 - L'API est versionnée par `URLPathVersioning` ; seule `v1` est autorisée. Le
-  routeur `apps.api.urls` reste volontairement vide jusqu'aux endpoints métier.
+  routeur `apps.api.urls` monte les routes `/api/v1/auth/` et reste extensible
+  pour les futurs endpoints métier.
 - Les réponses de succès utilisent `{"ok": true, "data": ...}` ; les erreurs
   utilisent `{"ok": false, "error", "code", "details"}` avec des codes stables.
 - La pagination accepte `page` et `page_size`, avec 20 éléments par défaut et
@@ -160,10 +181,12 @@ Principes appliqués :
 - `PixeoSerializer` et `PixeoModelSerializer` convertissent récursivement les
   clés en camelCase, y compris pour les erreurs de validation.
 - Les permissions de base distinguent `IsPhotographer`, `IsPlatformAdmin` et les
-  vues publiques explicites (`AllowAny`). L'isolation multi-tenant sera ajoutée
-  dans les lots métier.
+  vues publiques explicites (`AllowAny`). Les permissions de rôle vérifient aussi
+  le statut courant du compte. L'isolation multi-tenant sera ajoutée dans les
+  lots métier.
 - La documentation OpenAPI est exposée via `schema`, Swagger UI et ReDoc ; elle
   est publique en développement et réservée aux administrateurs en production.
+  Les schémas de sécurité `jwtAuth` et `cookieAuth` sont documentés.
 
 ## 4. Modèle de données cible
 
@@ -203,18 +226,18 @@ Règles de `branding_username` :
 - normalisation appliquée par `clean_fields()` et `save()`, donc à la création
   comme à la modification ;
 - validation explicite via `full_clean()` dans le manager de création ; les
-  serializers C5 déclencheront la validation des modifications ;
+  serializers des lots métier déclencheront la validation des modifications ;
 - résolution d'authentification par e-mail insensible à la casse via
   `UserManager.get_by_natural_key()`.
 
 **Pas de champ `plan` sur `User`.** Le plan actif est porté par `Subscription`.
-`storage_used_bytes` n'est pas créé en A3 ; il sera ajouté avec la logique de
+`storage_used_bytes` n'est pas créé en A5 ; il sera ajouté avec la logique de
 quota, sans dupliquer le plan.
 
 La migration initiale `accounts.0001_initial` est versionnée et appliquée sur
 PostgreSQL. Elle crée `accounts_user` avec la clé primaire UUID et les
 contraintes `UNIQUE (email)` et `UNIQUE (branding_username)`. Aucun modèle métier
-n'est créé en A3.
+n'est créé en A5.
 
 Django Admin applique les règles du modèle : le formulaire de création hash le
 mot de passe, le hash n'est jamais éditable, et `suspended_at` est maintenu en
@@ -275,13 +298,40 @@ Points clés :
 
 ### Photographe / admin
 
-- Access token JWT courte durée, conservé **en mémoire** côté navigateur.
-- Refresh token dans un cookie **HttpOnly**, `Secure` en production, `SameSite`
-  adapté, avec rotation et blacklist.
-- Protection CSRF sur les requêtes mutantes (double-submit token).
-- CORS limité aux origines Pixeo connues.
+- Access token JWT de courte durée (10 minutes par défaut), conservé **en
+  mémoire** côté navigateur et envoyé via `Authorization: Bearer`.
+- Refresh token dans un cookie **HttpOnly**, `SameSite=Lax`, `Secure` en
+  production, host-only et limité au chemin `/api/v1/auth/`. Il n'est jamais
+  retourné dans le JSON.
+- Rotation à chaque refresh : l'ancien refresh R1 est blacklisté. La déconnexion
+  blackliste le refresh courant et supprime le cookie.
+- La réutilisation de R1 est refusée avec `TOKEN_REVOKED`. SimpleJWT blackliste
+  le jeton individuel, pas sa famille : R2 reste valide après la détection du
+  rejeu. Une révocation de famille n'est pas implémentée en A5.
+- Évolution proportionnée si ce besoin devient critique : ajouter un identifiant
+  de session (`sid`) commun aux refresh d'une même connexion, le stocker dans un
+  modèle de session et marquer la session révoquée dès qu'un refresh déjà
+  blacklisté est rejoué. Compromis : une écriture/lookup supplémentaire par
+  refresh, une politique de nettoyage, la gestion des courses et une migration
+  des jetons. Cette complexité n'est pas justifiée pour A5 ; la blacklist
+  individuelle, la durée courte de l'access token et le contrôle du statut du
+  compte couvrent le besoin actuel.
+- Protection CSRF sur `login`, `refresh` et `logout` via `X-CSRFToken`. Le jeton
+  est obtenu via `GET /api/v1/auth/csrf/`. Le login crée une session, il est donc
+  protégé contre le Login CSRF même s'il ne consomme pas encore le cookie de
+  refresh. Aucune désactivation globale de CSRF.
+- Le login n'accepte que `application/json` ; les formulaires HTML classiques
+  (`form-urlencoded`/`multipart`) et les corps `text/plain` ne peuvent pas créer
+  de session.
+- CORS limité aux origines Pixeo explicitement connues, avec credentials. En
+  production, aucun wildcard de sous-domaines tenants n'est activé.
+- Les contrôles `is_active` et `is_suspended` sont refaits à chaque requête
+  authentifiée, pas seulement au login.
 - Les sessions photographe et l'accès public aux galeries sont **séparés** : un
   visiteur de galerie ne reçoit jamais de JWT photographe.
+- Limite connue : un access token déjà émis reste valide jusqu'à son expiration
+  après un logout ; il n'y a pas de révocation immédiate des access tokens dans
+  ce lot. La durée courte limite cette fenêtre.
 
 ### Accès public aux galeries
 
@@ -317,17 +367,20 @@ Abstraction via le backend de stockage Django :
 
 ## 7. API
 
-- Préfixe : `/api/<version>/`, avec `v1` comme seule version autorisée en A4.
+- Préfixe : `/api/<version>/`, avec `v1` comme seule version autorisée en A5.
 - Réponses de succès : `{"ok": true, "data": ...}`.
 - Erreurs uniformes : `{"ok": false, "error", "code", "details"}` ; codes
   stables, détails de validation conservés, aucune fuite interne.
 - Pagination standard : `page`, `page_size` (20 par défaut, 100 maximum), réponse
   `items`, `total`, `page`, `pageSize`.
 - Conversion `camelCase` centralisée dans les serializers.
+- Authentification : access JWT Bearer, refresh cookie HttpOnly, rotation,
+  blacklist et CSRF sur login/refresh/logout. Routes sous `/api/v1/auth/`.
 - Permissions de base : `IsPhotographer`, `IsPlatformAdmin`, `AllowAny` explicite
-  pour les vues publiques.
+  pour les vues publiques. Les permissions de rôle contrôlent aussi le statut.
 - Documentation OpenAPI générée avec `drf-spectacular` : `/api/v1/schema/`,
-  `/api/v1/docs/` (Swagger UI) et `/api/v1/redoc/`.
+  `/api/v1/docs/` (Swagger UI) et `/api/v1/redoc/`. Les schémas `jwtAuth` et
+  `cookieAuth` sont déclarés.
 - Health check `/api/v1/health/` : vérifie PostgreSQL et renvoie HTTP 503 si la
   base est indisponible. Son format historique est conservé.
 - Détail du contrat : [`API_DOCUMENTATION.md`](API_DOCUMENTATION.md).
@@ -336,13 +389,19 @@ Abstraction via le backend de stockage Django :
 
 - Isolation stricte par tenant dans les vues, querysets, serializers et permissions.
 - Aucun accès à un objet d'un autre photographe, même avec un UUID valide.
-- Rate limiting sur connexion, mots de passe de galerie, codes d'accès et PIN.
+- Rate limiting sur connexion et refresh (5/min et 30/min par défaut), ainsi que
+  sur les futurs mots de passe de galerie, codes d'accès et PIN.
 - Transactions pour inscription, changement de plan, suppression de collection,
   retrait de photos, création de partage.
 - Validation des uploads : type MIME, taille, dimensions, nom de fichier.
 - Pas de succès simulé : une fonctionnalité non configurée renvoie une erreur
   explicite (`not_configured`) ou est désactivée.
 - Journalisation des actions admin sensibles.
+- Aucun mot de passe, hash, access token ou refresh token n'est journalisé ou
+  renvoyé dans les réponses. Les erreurs d'authentification sont génériques.
+- CSRF obligatoire sur les opérations qui créent ou consomment le cookie de
+  refresh (`login`, `refresh`, `logout`) ; CORS restrictif avec credentials ;
+  cookies host-only par défaut. CORS ne remplace pas CSRF.
 
 ## 9. Hors périmètre V1
 

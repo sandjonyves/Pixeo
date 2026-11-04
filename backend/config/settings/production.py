@@ -42,9 +42,13 @@ if DATABASES["default"]["ENGINE"] == "django.db.backends.sqlite3":
     )
 
 CORS_ALLOWED_ORIGINS = env.list("CORS_ALLOWED_ORIGINS", default=[])  # noqa: F405
+# Aucune expression régulière large n'est activée par défaut : les origines
+# des applications (app.pixeo.com, admin.pixeo.com) doivent être déclarées
+# explicitement. Les sous-domaines tenants ne doivent pas recevoir l'accès
+# CORS avec credentials.
 CORS_ALLOWED_ORIGIN_REGEXES = env.list(  # noqa: F405
     "CORS_ALLOWED_ORIGIN_REGEXES",
-    default=[r"^https://[a-z0-9-]+\.pixeo\.com$"],
+    default=[],
 )
 if not CORS_ALLOWED_ORIGINS and not CORS_ALLOWED_ORIGIN_REGEXES:
     raise ImproperlyConfigured(
@@ -86,8 +90,9 @@ CSRF_COOKIE_SECURE = True
 AUTH_REFRESH_COOKIE_SECURE = True
 
 # Par défaut, les cookies restent host-only (aucun domaine global imposé).
-# La stratégie de domaine inter-sous-domaines sera décidée et testée aux lots
-# C2/C3 ; elle peut être fournie explicitement par l'environnement.
+# Le refresh token est posé par api.pixeo.com et n'est pas partagé avec les
+# sous-domaines tenants. Le cookie CSRF est également host-only ; le frontend
+# lit le jeton dans la réponse JSON de /api/v1/auth/csrf/.
 
 STORAGES["staticfiles"] = {  # noqa: F405
     "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",

@@ -1,13 +1,14 @@
 # Pixeo — Contrat API
 
-> **Statut : fondation API, lot A4.**
+> **Statut : fondation API A4 et authentification A5.**
 > Les endpoints techniques `health`, `schema`, `docs` et `redoc` sont implémentés,
 > ainsi que le versionnement `/api/v1/`, les enveloppes de réponse, la gestion
 > centralisée des erreurs, la pagination, les permissions de base et la conversion
-> `camelCase`. La migration initiale, PostgreSQL et Django Admin restent en place.
-> Aucun endpoint métier ni authentification JWT n'est encore exposé. Les chemins
-> métier ci-dessous constituent la cible validée et seront ajustés, le cas
-> échéant, lors des lots backend.
+> `camelCase`. Le lot A5 ajoute la connexion JWT, le cookie de refresh, sa
+> rotation et sa révocation, le profil courant et la protection CSRF/CORS.
+> La migration initiale, PostgreSQL et Django Admin restent en place.
+> Les endpoints métier ci-dessous restent une cible : aucun endpoint
+> d'inscription, de galerie, de photo, d'abonnement ou de paiement n'est exposé.
 
 ## 1. Conventions générales
 
@@ -50,7 +51,9 @@ Les codes sont stables et en majuscules. Codes transverses implémentés en A4 :
 `VALIDATION_ERROR`, `INVALID_REQUEST`, `AUTHENTICATION_REQUIRED`,
 `AUTHENTICATION_FAILED`, `PERMISSION_DENIED`, `NOT_FOUND`,
 `METHOD_NOT_ALLOWED`, `UNSUPPORTED_MEDIA_TYPE`, `RATE_LIMITED`,
-`INTERNAL_ERROR` et `API_ERROR`. Les codes métier prévus (`CONFLICT`,
+`INTERNAL_ERROR` et `API_ERROR`. Le lot A5 ajoute `INVALID_CREDENTIALS`,
+`TOKEN_EXPIRED`, `TOKEN_INVALID`, `TOKEN_REVOKED`, `ACCOUNT_SUSPENDED`,
+`ACCOUNT_DISABLED` et `CSRF_FAILED`. Les codes métier prévus (`CONFLICT`,
 `GALLERY_LOCKED`, `INVALID_PASSWORD`, `INVALID_PIN`, `EXPIRED`,
 `QUOTA_EXCEEDED`, `NOT_CONFIGURED`) seront ajoutés avec leurs endpoints.
 
@@ -103,30 +106,130 @@ serializers doivent hériter de `PixeoSerializer` ou `PixeoModelSerializer`.
 
 ## 2. Authentification
 
-| Méthode | Route | Description |
-|---------|-------|-------------|
-| POST | `/api/v1/auth/register/` | Inscription photographe + Free + branding + homepage (transaction) |
-| POST | `/api/v1/auth/login/` | Connexion ; access en réponse, refresh en cookie |
-| POST | `/api/v1/auth/refresh/` | Rotation du refresh token |
-| POST | `/api/v1/auth/logout/` | Blacklist du refresh + suppression cookie |
-| GET | `/api/v1/auth/me/` | Profil courant (sans secret) |
-| PATCH | `/api/v1/auth/me/` | Mise à jour du profil |
-| POST | `/api/v1/auth/password/change/` | Changement de mot de passe |
-| POST | `/api/v1/auth/password/reset/request/` | Demande de réinitialisation (V1 : journalisée) |
-| POST | `/api/v1/auth/password/reset/confirm/` | Confirmation par token |
+### 2.1 Endpoints implémentés en A5
 
-Règles :
+| Méthode | Route | Authentification | Description |
+|---------|-------|------------------|-------------|
+| POST | `/api/v1/auth/login/` | CSRF | Vérifie e-mail + mot de passe ; retourne l'access token et pose le cookie de refresh |
+| POST | `/api/v1/auth/refresh/` | Cookie de refresh + CSRF | Effectue la rotation, blackliste l'ancien refresh et retourne un nouvel access token |
+| POST | `/api/v1/auth/logout/` | Cookie de refresh + CSRF | Blackliste le refresh s'il est valide et supprime le cookie |
+| GET | `/api/v1/auth/me/` | Bearer ou session Django | Retourne le profil courant, sans secret |
+| GET | `/api/v1/auth/csrf/` | Aucune | Pose le cookie CSRF et retourne le jeton à envoyer dans `X-CSRFToken` |
+
+Les endpoints d'inscription, de mise à jour du profil, de changement ou de
+réinitialisation de mot de passe ne sont **pas** implémentés en A5. Ils restent
+dans la cible des lots ultérieurs.
+
+### 2.2 Tokens et cookies
 
 - L'identifiant de connexion est l'e-mail (`User.USERNAME_FIELD = "email"`) ; le
   modèle `User` n'a pas de champ `username`.
-- L'access token n'est jamais stocké dans `localStorage`.
-- Le refresh token est `HttpOnly`, `Secure` en production, avec rotation.
-- Le login et la réinitialisation sont rate-limités.
-- Un compte `suspended` ne peut pas se connecter.
-- Au lot C5, l'authentification JWT vérifiera `is_suspended` à **chaque requête**
-  (et pas seulement au login) : un access token encore valide ne donnera plus
-  accès à l'API dès la suspension. `is_active` reste réservé à la désactivation
-  Django ; la suspension métier est portée par `is_suspended`.
+- L'access token est un JWT signé, de courte durée (10 minutes par défaut,
+  configurable via `AUTH_ACCESS_TOKEN_LIFETIME_MINUTES`). Il est retourné dans
+  `data.accessToken` et doit être envoyé avec `Authorization: Bearer <token>`.
+- L'access token reste en mémoire côté frontend ; il ne doit pas être stocké dans
+  `localStorage` ou `sessionStorage`.
+- Le refresh token est **uniquement** dans un cookie `HttpOnly`, `SameSite=Lax`,
+  `Secure` en production, host-only par défaut (aucun `Domain` global). Son
+  chemin est `/api/v1/auth/`. Il n'apparaît jamais dans le JSON.
+- La durée de vie du refresh est de 7 jours par défaut
+  (`AUTH_REFRESH_TOKEN_LIFETIME_DAYS`). Chaque refresh effectue une rotation :
+  l'ancien jeton R1 est blacklisté et ne peut plus être réutilisé.
+- La réutilisation de R1 est détectée et refusée avec `401 TOKEN_REVOKED`.
+  SimpleJWT blackliste le jeton individuel, pas toute sa famille : dans la
+  politique A5, le refresh suivant R2 reste valide après la détection du rejeu
+  de R1. Une révocation de famille n'est pas implémentée.
+- La déconnexion blackliste le refresh courant et supprime le cookie. L'access
+  token déjà émis reste valide jusqu'à son expiration : il n'existe pas de
+  révocation immédiate d'un access token JWT dans ce lot.
+
+Exemple de réponse de connexion :
+
+```json
+{
+  "ok": true,
+  "data": {
+    "accessToken": "<jwt>",
+    "user": {
+      "id": "00000000-0000-0000-0000-000000000000",
+      "email": "photographer@example.com",
+      "firstName": "Jean",
+      "lastName": "Dupont",
+      "role": "photographer",
+      "brandingUsername": "jean-dupont",
+      "isActive": true,
+      "isSuspended": false,
+      "dateJoined": "2026-11-03T00:00:00Z"
+    }
+  }
+}
+```
+
+Le cookie est posé dans l'en-tête `Set-Cookie` et n'est pas répété dans
+`data`. La réponse de refresh ne contient que `data.accessToken`.
+
+### 2.3 CSRF et CORS
+
+- `GET /api/v1/auth/csrf/` retourne `data.csrfToken` et pose le cookie CSRF
+  Django. Le frontend envoie ce jeton dans `X-CSRFToken` pour `POST
+  /api/v1/auth/login/`, `POST /api/v1/auth/refresh/` et `POST
+  /api/v1/auth/logout/`.
+- Le login exige aussi un jeton CSRF : il crée un état d'authentification et
+  dépose un cookie de refresh. Sans jeton, il retourne `403 CSRF_FAILED` sans
+  créer de session.
+- Le login n'accepte que `Content-Type: application/json`. Une soumission HTML
+  classique (`application/x-www-form-urlencoded` ou `multipart/form-data`) ou un
+  corps `text/plain` ne peut pas créer de session : le refus est un `403` sans
+  CSRF, ou un `400`/`415` avec un jeton CSRF valide.
+- La vérification CSRF n'est pas désactivée globalement. Un échec retourne
+  `403` avec le code `CSRF_FAILED`.
+- CORS n'autorise que les origines explicitement déclarées, avec
+  `CORS_ALLOW_CREDENTIALS=True`. Aucun wildcard global n'est activé en
+  production. Une requête JSON cross-origin déclenche un preflight ; une origine
+  non autorisée ne reçoit pas `Access-Control-Allow-Origin` et le navigateur
+  n'envoie pas la requête réelle. CORS est une défense complémentaire, pas un
+  remplacement du CSRF.
+- Le frontend et l'API doivent rester **same-site** pour que le cookie
+  `SameSite=Lax` soit envoyé ; le frontend utilise `credentials: "include"`.
+- Le cookie CSRF et le cookie de refresh restent host-only. Le frontend lit le
+  jeton CSRF dans la réponse JSON, pas via `document.cookie`.
+
+### 2.4 Statut du compte et permissions
+
+- Un compte `is_active=False` est refusé avec `ACCOUNT_DISABLED`.
+- Un compte `is_suspended=True` est refusé avec `ACCOUNT_SUSPENDED`.
+- Ces contrôles sont effectués à la connexion, au refresh et à **chaque requête
+  authentifiée** : un ancien access token ou un ancien refresh token ne permet
+  pas de contourner une suspension ou une désactivation.
+- `IsPhotographer` et `IsPlatformAdmin` vérifient également le rôle et le statut
+  courant. La permission par défaut des vues privées reste `IsAuthenticated`.
+- Un e-mail inconnu et un mot de passe incorrect renvoient la même réponse
+  `401 INVALID_CREDENTIALS`, sans indiquer lequel est faux.
+
+### 2.5 Throttling
+
+- Connexion : 5 tentatives par minute et par identité réseau par défaut
+  (`AUTH_LOGIN_RATE`).
+- Refresh : 30 renouvellements par minute et par identité réseau par défaut
+  (`AUTH_REFRESH_RATE`).
+- Le dépassement retourne `429 RATE_LIMITED`. Le throttling DRF est une
+  protection complémentaire, pas une solution anti-brute-force complète ; en
+  production derrière un proxy, configurer correctement la confiance dans
+  `X-Forwarded-For`.
+
+### 2.6 Erreurs d'authentification
+
+| Code | HTTP | Sens |
+|------|------|------|
+| `INVALID_CREDENTIALS` | 401 | E-mail inconnu ou mot de passe incorrect |
+| `AUTHENTICATION_REQUIRED` | 401 | Aucun token ou aucune session |
+| `TOKEN_EXPIRED` | 401 | Access ou refresh expiré |
+| `TOKEN_INVALID` | 401 | Jeton malformé, mauvais type ou compte introuvable |
+| `TOKEN_REVOKED` | 401 | Refresh blacklisté ou déjà utilisé |
+| `ACCOUNT_SUSPENDED` | 403 | Compte suspendu |
+| `ACCOUNT_DISABLED` | 403 | Compte désactivé |
+| `CSRF_FAILED` | 403 | Jeton CSRF absent, invalide ou origine refusée |
+| `RATE_LIMITED` | 429 | Quota de tentatives dépassé |
 
 ## 3. Studio (photographe authentifié)
 
@@ -264,7 +367,7 @@ Toutes les routes admin exigent `role = platform_admin` et sont auditées.
 | GET | `/api/v1/redoc/` | ReDoc |
 
 Le préfixe public est `/api/<version>/`. Seule la version `v1` est autorisée en
-A4 ; une version inconnue est rejetée avec l'enveloppe d'erreur standard. Le
+A5 ; une version inconnue est rejetée avec l'enveloppe d'erreur standard. Le
 endpoint de santé est conservé hors routeur pour préserver exactement son
 contrat historique.
 
