@@ -1,7 +1,8 @@
 # Pixeo — Développement backend
 
-> Dernière mise à jour : 2026-11-03
-> Lot en cours : **A5 — Authentification JWT et sessions** (réalisé, en attente de validation)
+> Dernière mise à jour : 2026-11-14
+> Lot en cours : **A6 — Inscription des photographes et initialisation de leur
+> espace Pixeo** (réalisé, validé)
 
 ## 1. Méthode de travail
 
@@ -24,9 +25,10 @@ n'est modifié par les lots backend avant la Phase E.
 | A | **A1** | Squelette `backend/`, venv, dépendances, `.env.example`, `.gitignore`, documentation, stratégie sous-domaines, audit nommage | **Réalisé — validé** |
 | A | **A2** | Projet Django, settings, configuration, utilisateur custom | **Réalisé — validé** |
 | A | **A3** | PostgreSQL, migration initiale, superutilisateur, Django Admin, health DB | **Réalisé — validé** |
-| A | **A4** | Fondation API REST : versionnement, erreurs, pagination, camelCase, permissions, OpenAPI | **Réalisé — en attente de validation** |
-| A | **A5** | Authentification JWT, cookie refresh, rotation/blacklist, CSRF/CORS, profil courant | **Réalisé — en attente de validation** |
-| B | — | Studio, branding, homepage, plans/abonnements | Non démarré |
+| A | **A4** | Fondation API REST : versionnement, erreurs, pagination, camelCase, permissions, OpenAPI | **Réalisé — validé** |
+| A | **A5** | Authentification JWT, cookie refresh, rotation/blacklist, CSRF/CORS, profil courant | **Réalisé — validé** |
+| A | **A6** | Inscription publique, plan Free, branding, homepage initiale | **Réalisé — validé** |
+| B | — | Studio, branding, homepage, plans/abonnements | Partiellement préparé par A6 (modèles initiaux) |
 | C | — | Collections, photos, stockage, accès publics, favoris/notes | Non démarré |
 | D | — | Intégration frontend et retrait du `localStorage` | Non démarré |
 | E | — | Finalisation, durcissement et mise en production | Non démarré |
@@ -280,7 +282,88 @@ déjà installé et ses migrations déjà appliquées.
 - A4 reste un commit local non poussé ; A5 reste non commité jusqu'à validation
   explicite. `origin/main` pointe toujours sur A3.
 
-## 9. Décisions structurantes
+## 9. Lot A6 — inscription et initialisation de l'espace
+
+### Livrables
+
+| Élément | Chemin | État |
+|---------|--------|------|
+| Application billing | `backend/apps/billing/` | Créée |
+| Plan et abonnement | `backend/apps/billing/models.py` | Créés |
+| Migration billing | `backend/apps/billing/migrations/0001_initial.py` | Créée |
+| Seed plan Free | `backend/apps/billing/migrations/0002_seed_free_plan.py` | Créée |
+| Application studios | `backend/apps/studios/` | Créée |
+| Branding et homepage | `backend/apps/studios/models.py` | Créés |
+| Migration studios | `backend/apps/studios/migrations/0001_initial.py` | Créée |
+| Service d'inscription | `backend/apps/accounts/registration/services.py` | Créé |
+| Serializer d'inscription | `backend/apps/accounts/registration/serializers.py` | Créé |
+| Vue d'inscription | `backend/apps/accounts/registration/views.py` | Créée |
+| Route `/api/v1/auth/register/` | `backend/apps/accounts/auth/urls.py` | Ajoutée |
+| Throttling inscription | `backend/apps/accounts/auth/throttles.py` | Ajouté |
+| Codes conflit/configuration | `backend/apps/accounts/auth/exceptions.py`, `apps/api/exceptions.py` | Ajoutés |
+| Admin billing/studios | `backend/apps/billing/admin.py`, `apps/studios/admin.py` | Créés |
+| Settings | `backend/config/settings/base.py` | Apps et throttle ajoutés |
+| Exemple d'environnement | `backend/.env.example` | `AUTH_REGISTER_RATE` ajouté |
+| Tests inscription | `backend/apps/accounts/tests/test_auth_register.py` | Créés |
+| Tests modèles | `backend/apps/billing/tests/`, `backend/apps/studios/tests/` | Créés |
+| OpenAPI | `backend/apps/api/tests/test_documentation.py`, schéma register | Mis à jour |
+| Documentation | `backend/README.md`, `docs/API_DOCUMENTATION.md`, `docs/ARCHITECTURE.md`, `docs/LOCAL_DEVELOPMENT.md` | Mise à jour |
+
+Aucun endpoint de galerie, photo, abonnement payant, paiement, e-mail réel,
+vérification d'e-mail, récupération de mot de passe ou modification de profil
+n'est ajouté en A6.
+
+### Modèles et contraintes
+
+- `billing.Plan` : `code` unique, nom, prix FCFA, quota de stockage,
+  fonctionnalités JSON, actif, ordre, dates.
+- `billing.Subscription` : `user`, `plan`, statut, période courante,
+  `cancel_at_period_end`, dates. Contrainte partielle d'unicité d'un abonnement
+  actif par utilisateur.
+- `studios.BrandingSettings` : 1:1 `User`, domaine custom, logo, favicon,
+  filigrane, texte, dates. Le `branding_username` n'est pas dupliqué.
+- `studios.HomepageSettings` : 1:1 `User`, activation, biographie, nom de marque,
+  dates.
+- Le plan `free` est seedé par migration de données. Aucun autre plan n'est seedé
+  en A6.
+
+### Vérifications réellement exécutées
+
+| Vérification | Résultat |
+|--------------|----------|
+| `pytest -q` PostgreSQL (`--no-migrations`) | **277 passed** |
+| `pytest -q -o addopts='' --create-db` avec migrations | **277 passed** |
+| `DATABASE_URL='sqlite:///:memory:' pytest -q` | **277 passed** |
+| `DATABASE_URL='sqlite:///:memory:' pytest -q -o addopts='' --create-db` | **277 passed** |
+| `python -m pip check` | `No broken requirements found.` |
+| `manage.py check` | `System check identified no issues (0 silenced).` |
+| `manage.py check --settings=config.settings.production` | `System check identified no issues (0 silenced).` |
+| `manage.py check --deploy --settings=config.settings.production` | Aucun problème avec `SECURE_SSL_REDIRECT=True`, `SECURE_HSTS_PRELOAD=True` et `CACHE_URL` explicites |
+| `manage.py makemigrations --check --dry-run` | `No changes detected` |
+| `manage.py spectacular --validate` | Schéma OpenAPI 3.0.3 valide |
+| Migrations `billing` et `studios` | Appliquées sur PostgreSQL de développement |
+| Plan Free seedé | `free`, actif, 5 Go |
+| Smoke test HTTP réel | `201`, compte `photographer`, Free actif, branding/homepage créés, rollback sans résidu |
+| Compte administrateur existant | Conservé (`admin@pixeo.test`, `platform_admin`, superuser) |
+| Tests inscription réussie | Compte, rôle, Free, branding, homepage, hash, login A5 |
+| Tests validations | Email, doublons, casse, mot de passe, confirmation, branding, champs inconnus |
+| Tests sécurité | Aucun admin, aucun mot de passe/hash retourné ou journalisé, JSON-only, throttling |
+| Tests atomicité | Échec subscription/branding/homepage → rollback complet |
+| Tests CORS inscription | Preflight origine autorisée/refusée |
+| OpenAPI inscription | Schéma camelCase, `201`, exemple, sans `X-CSRFToken` |
+| Fichiers frontend modifiés par A6 | 0 (les 8 modifications antérieures restent intactes) |
+
+### État de la base et Git
+
+- PostgreSQL local `pixeo` : 1 utilisateur, 1 superuser, 0 suspendu.
+- Plan Free : 1 ligne active. Aucun abonnement, branding ou homepage persistants
+  n'ont été créés par les tests.
+- Les migrations A1–A5 n'ont pas été modifiées.
+- A6 est validé et commité localement, sans push ; le worktree conserve les
+  8 modifications frontend préexistantes.
+- `origin/main` reste sur le commit A5 `d27e3f0`.
+
+## 10. Décisions structurantes
 
 - Nom officiel : **Pixeo**. Aucune référence à SimpleShoot.
 - Tenant = `accounts.User` via `branding_username` ; pas de modèle `Tenant`.
@@ -294,7 +377,7 @@ déjà installé et ses migrations déjà appliquées.
 - Stockage abstrait local/S3-R2.
 - Aucun faux succès : `not_configured` ou endpoint désactivé si non configuré.
 - Python en `snake_case`, API en `camelCase`.
-- L'API est versionnée par URL (`/api/v1/`) ; seule `v1` est autorisée en A5.
+- L'API est versionnée par URL (`/api/v1/`) ; seule `v1` est autorisée en A6.
 - Les erreurs utilisent des codes stables en majuscules et une enveloppe unique.
 - La pagination expose 20 éléments par défaut, 100 maximum et `pageSize`.
 - Les permissions de base sont `IsPhotographer` et `IsPlatformAdmin` ; les vues
@@ -316,8 +399,23 @@ déjà installé et ses migrations déjà appliquées.
   être déclarées explicitement.
 - Un logout révoque le refresh mais pas un access token déjà émis ; sa courte
   durée de vie limite la fenêtre résiduelle.
+- L'inscription est publique, JSON-only et ne crée aucune session. Elle
+  n'applique pas CSRF car elle ne lit aucun cookie et ne crée aucun état
+  d'authentification ; JSON-only, CORS et le throttling dédié assurent la
+  protection.
+- Le rôle d'un compte inscrit est toujours `photographer`; tout champ `role`,
+  `is_staff`, `is_superuser` ou de plan fourni par le client est refusé.
+- L'inscription crée le `User`, la `Subscription` Free active, les
+  `BrandingSettings` et les `HomepageSettings` dans une transaction unique.
+- Le plan Free est seedé par migration ; les autres plans ne sont pas encore
+  seedés. Un utilisateur ne peut avoir qu'un abonnement actif à la fois.
+- Les modèles A6 sont placés dans `billing` et `studios`, conformément à la
+  cible d'architecture ; `accounts.User` reste la seule source du
+  `branding_username`.
+- Aucune connexion automatique après inscription : le client appelle ensuite
+  `/api/v1/auth/login/`.
 
-## 10. Problèmes rencontrés et points d'attention
+## 11. Problèmes rencontrés et points d'attention
 
 ### Problèmes résolus pendant A1
 
@@ -403,11 +501,34 @@ déjà installé et ses migrations déjà appliquées.
 - Un logout ne peut pas révoquer un access token déjà émis ; la durée courte de
   l'access token est la mesure de limitation retenue.
 
+### Problèmes résolus pendant A6
+
+- `--no-migrations` ne joue pas la migration de données du plan Free. Un fixture
+  `free_plan` crée le plan dans les tests rapides ; la migration reste la source
+  de vérité en PostgreSQL migré.
+- Les tests de modèles avec migrations trouvaient déjà le plan Free seedé. Les
+  fixtures utilisent `get_or_create` pour rester valides avec et sans migrations.
+- DRF ignore par défaut les champs inconnus. Le serializer d'inscription les
+  refuse explicitement, notamment `role`, `isStaff` et `isSuperuser`.
+- Le schéma OpenAPI généré depuis les serializers runtime utilisait les noms
+  snake_case internes. Des schémas publics dédiés en camelCase documentent le
+  corps et la réponse d'inscription.
+- Un conflit d'e-mail ou de nom public est signalé par une erreur non-field
+  générique (`nonFieldErrors`). Cela reste une divulgation limitée de l'existence
+  d'un compte ; une vérification d'e-mail asynchrone pourra réduire ce risque
+  ultérieurement.
+- Le plan Free est lu et verrouillé à l'intérieur de la transaction
+  d'inscription. Un plan absent ou inactif renvoie `503 NOT_CONFIGURED` sans
+  création partielle. Une course d'unicité à l'insertion renvoie `409 CONFLICT`.
+- Les throttles A5/A6 utilisent `REMOTE_ADDR` par défaut et n'interprètent
+  `X-Forwarded-For` que si `AUTH_TRUSTED_PROXY_COUNT` est explicitement
+  configuré après vérification de la topologie du reverse proxy.
+
 ### Points d'attention
 
 - **Travail frontend antérieur non commité** : 8 fichiers modifiés (limites de
-  galeries) ont été laissés intacts pendant A1, A2, A3, A4 et A5. Ils devront
-  être commités séparément après validation.
+  galeries) ont été laissés intacts pendant A1 à A6. Ils devront être commités
+  séparément après validation.
 - Le superutilisateur créé pour la validation A3 est local ; son mot de passe
   n'est pas versionné. Il devra être remplacé par un compte de production créé
   selon la procédure d'exploitation.
@@ -420,17 +541,17 @@ déjà installé et ses migrations déjà appliquées.
 - Les dépendances de test (pytest, pytest-django) sont maintenant dans
   `backend/requirements-dev.txt`.
 
-## 11. Prochain lot
+## 12. Prochain lot
 
-**A5 — en attente de validation explicite.**
+**A7 — non démarré.**
 
-- A5 est implémenté et vérifié, mais volontairement non commité.
-- Aucun lot suivant (A6, modèles métier, inscription, galeries, photos,
-  abonnements) ne doit démarrer avant validation.
-- A4 reste un commit local non poussé ; `origin/main` pointe sur A3.
-- Le commit A5 sera créé séparément après validation.
+- A6 est implémenté, vérifié et commité localement, sans push.
+- Aucun lot suivant (A7, galeries, photos, abonnements payants, e-mails réels)
+  n'est démarré.
+- `origin/main` pointe sur le commit A5 `d27e3f0`.
+- Le commit A6 a été créé séparément après validation, sans amendement de A5.
 
-## 12. Commandes utiles
+## 13. Commandes utiles
 
 ```bash
 # Backend
@@ -454,12 +575,17 @@ python manage.py showmigrations
 
 # Tests
 pytest -q
-pytest -q -o addopts='-ra --strict-markers'
+pytest -q -o addopts='' --create-db
 DATABASE_URL='sqlite:///:memory:' pytest -q
 
 # API technique
 curl -i http://localhost:8000/api/v1/health/
 curl -s http://localhost:8000/api/v1/schema/?format=json | head
+
+# Inscription (JSON-only, sans session)
+curl -i -X POST http://localhost:8000/api/v1/auth/register/ \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"photographe@example.com","password":"MotDePasseSolide123!","passwordConfirmation":"MotDePasseSolide123!","brandingUsername":"studio-photo"}'
 # Swagger UI : http://localhost:8000/api/v1/docs/
 # ReDoc     : http://localhost:8000/api/v1/redoc/
 

@@ -55,6 +55,14 @@ _PIXEO_ERRORS = {
         "CSRF_FAILED",
         "La vérification CSRF a échoué.",
     ),
+    "registration_conflict": (
+        "CONFLICT",
+        "Un compte avec ces informations existe déjà.",
+    ),
+    "registration_unavailable": (
+        "NOT_CONFIGURED",
+        "Le service d'inscription est temporairement indisponible.",
+    ),
 }
 
 _ERRORS_BY_STATUS = {

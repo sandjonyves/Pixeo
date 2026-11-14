@@ -77,3 +77,23 @@ class CSRFCheckFailed(PermissionDenied):
     default_detail = "La vérification CSRF a échoué."
     default_code = "csrf_failed"
     pixeo_code = "csrf_failed"
+
+
+class RegistrationConflict(APIException):
+    """Conflit d'unicité détecté pendant l'inscription."""
+
+    status_code = status.HTTP_409_CONFLICT
+    default_detail = "Un compte avec ces informations existe déjà."
+    default_code = "registration_conflict"
+    pixeo_code = "registration_conflict"
+
+
+class RegistrationUnavailable(APIException):
+    """Configuration d'inscription incomplète côté serveur."""
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    default_detail = (
+        "Le service d'inscription est temporairement indisponible."
+    )
+    default_code = "registration_unavailable"
+    pixeo_code = "registration_unavailable"

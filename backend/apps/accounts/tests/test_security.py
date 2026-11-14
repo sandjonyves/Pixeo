@@ -45,6 +45,7 @@ print(json.dumps({
     "SESSION_COOKIE_DOMAIN": settings.SESSION_COOKIE_DOMAIN,
     "AUTH_REFRESH_COOKIE_DOMAIN": settings.AUTH_REFRESH_COOKIE_DOMAIN,
     "AUTH_REFRESH_COOKIE_PATH": settings.AUTH_REFRESH_COOKIE_PATH,
+    "AUTH_TRUSTED_PROXY_COUNT": settings.AUTH_TRUSTED_PROXY_COUNT,
     "CSRF_COOKIE_SAMESITE": settings.CSRF_COOKIE_SAMESITE,
     "CSRF_COOKIE_HTTPONLY": settings.CSRF_COOKIE_HTTPONLY,
     "SECURE_HSTS_SECONDS": settings.SECURE_HSTS_SECONDS,
@@ -139,13 +140,21 @@ def test_production_settings_are_hardened():
     assert probe["AUTH_REFRESH_COOKIE_SECURE"] is True
     assert probe["CORS_ALLOW_ALL_ORIGINS"] is False
     assert "https://app.pixeo.com" in probe["CORS_ALLOWED_ORIGINS"]
-    assert probe["CORS_ALLOWED_ORIGIN_REGEXES"]
+    assert "https://admin.pixeo.com" in probe["CORS_ALLOWED_ORIGINS"]
+    assert probe["CORS_ALLOWED_ORIGIN_REGEXES"] == []
     assert "https://app.pixeo.com" in probe["CSRF_TRUSTED_ORIGINS"]
+    assert "https://admin.pixeo.com" in probe["CSRF_TRUSTED_ORIGINS"]
+    assert "https://api.pixeo.com" in probe["CSRF_TRUSTED_ORIGINS"]
+    assert all("*" not in origin for origin in probe["CORS_ALLOWED_ORIGINS"])
+    assert all(
+        "*" not in origin for origin in probe["CSRF_TRUSTED_ORIGINS"]
+    )
     assert probe["DB_ENGINE"] == "django.db.backends.postgresql"
     assert probe["CSRF_COOKIE_DOMAIN"] is None
     assert probe["SESSION_COOKIE_DOMAIN"] is None
     assert probe["AUTH_REFRESH_COOKIE_DOMAIN"] is None
     assert probe["AUTH_REFRESH_COOKIE_PATH"] == "/api/v1/auth/"
+    assert probe["AUTH_TRUSTED_PROXY_COUNT"] == 0
     assert probe["CSRF_COOKIE_SAMESITE"] == "Lax"
     assert probe["CSRF_COOKIE_HTTPONLY"] is False
     assert probe["SECURE_HSTS_SECONDS"] > 0
@@ -156,13 +165,12 @@ def test_production_settings_are_hardened():
     assert "api.pixeo.com" in probe["ALLOWED_HOSTS"]
 
 
-def test_production_cors_regex_is_explicit():
-    probe = _probe_production_settings(
-        {"CORS_ALLOWED_ORIGIN_REGEXES": ""},
-    )
+def test_production_cors_has_no_tenant_subdomain_regex():
+    probe = _probe_production_settings()
 
     assert probe["CORS_ALLOWED_ORIGIN_REGEXES"] == []
     assert "https://app.pixeo.com" in probe["CORS_ALLOWED_ORIGINS"]
+    assert "https://admin.pixeo.com" in probe["CORS_ALLOWED_ORIGINS"]
 
 
 def test_production_requires_explicit_cors_origins():

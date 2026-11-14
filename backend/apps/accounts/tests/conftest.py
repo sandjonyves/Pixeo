@@ -7,6 +7,23 @@ from django.core.cache import cache
 from rest_framework.test import APIClient
 
 from apps.accounts.models import User, UserRole
+from apps.accounts.registration.services import FREE_PLAN_CODE
+from apps.billing.models import Plan
+
+FREE_PLAN_DEFAULTS = {
+    "name": "Free",
+    "price_monthly_fcfa": 0,
+    "storage_limit_bytes": 5 * 1024 * 1024 * 1024,
+    "features": [
+        "5 Go storage",
+        "Unlimited galleries",
+        "Private client link",
+        "Password protection",
+        "Pixeo watermark",
+    ],
+    "is_active": True,
+    "sort_order": 0,
+}
 
 
 @pytest.fixture(autouse=True)
@@ -16,6 +33,17 @@ def clear_throttle_cache():
     cache.clear()
     yield
     cache.clear()
+
+
+@pytest.fixture
+def free_plan(db) -> Plan:
+    """Plan Free disponible même sans exécution des migrations de données."""
+
+    plan, _created = Plan.objects.get_or_create(
+        code=FREE_PLAN_CODE,
+        defaults=FREE_PLAN_DEFAULTS,
+    )
+    return plan
 
 
 @pytest.fixture

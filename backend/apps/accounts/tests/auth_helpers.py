@@ -7,6 +7,7 @@ from typing import Any
 from django.conf import settings
 from rest_framework.test import APIClient
 
+REGISTER_URL = "/api/v1/auth/register/"
 LOGIN_URL = "/api/v1/auth/login/"
 REFRESH_URL = "/api/v1/auth/refresh/"
 LOGOUT_URL = "/api/v1/auth/logout/"

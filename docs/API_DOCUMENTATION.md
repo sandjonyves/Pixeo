@@ -1,14 +1,16 @@
 # Pixeo — Contrat API
 
-> **Statut : fondation API A4 et authentification A5.**
+> **Statut : fondation API A4, authentification A5 et inscription A6.**
 > Les endpoints techniques `health`, `schema`, `docs` et `redoc` sont implémentés,
 > ainsi que le versionnement `/api/v1/`, les enveloppes de réponse, la gestion
 > centralisée des erreurs, la pagination, les permissions de base et la conversion
 > `camelCase`. Le lot A5 ajoute la connexion JWT, le cookie de refresh, sa
 > rotation et sa révocation, le profil courant et la protection CSRF/CORS.
+> Le lot A6 ajoute l'inscription publique, la création transactionnelle du plan
+> Free, du branding et de la homepage initiale.
 > La migration initiale, PostgreSQL et Django Admin restent en place.
-> Les endpoints métier ci-dessous restent une cible : aucun endpoint
-> d'inscription, de galerie, de photo, d'abonnement ou de paiement n'est exposé.
+> Les endpoints métier ci-dessous restent une cible : aucun endpoint de galerie,
+> de photo, d'abonnement payant ou de paiement n'est exposé.
 
 ## 1. Conventions générales
 
@@ -21,7 +23,7 @@
 | Identifiants | UUID |
 | Authentification | `Authorization: Bearer <accessToken>` |
 | Refresh | Cookie HttpOnly `pixeo_refresh` (jamais accessible en JS) |
-| CSRF | `X-CSRFToken` sur les requêtes mutantes |
+| CSRF | `X-CSRFToken` sur login, refresh et logout (endpoints à cookie) |
 | Pagination | entrée `page`, `page_size` ; réponse `items`, `total`, `page`, `pageSize` |
 | Documentation | OpenAPI via `drf-spectacular` ; Swagger UI et ReDoc |
 
@@ -53,9 +55,11 @@ Les codes sont stables et en majuscules. Codes transverses implémentés en A4 :
 `METHOD_NOT_ALLOWED`, `UNSUPPORTED_MEDIA_TYPE`, `RATE_LIMITED`,
 `INTERNAL_ERROR` et `API_ERROR`. Le lot A5 ajoute `INVALID_CREDENTIALS`,
 `TOKEN_EXPIRED`, `TOKEN_INVALID`, `TOKEN_REVOKED`, `ACCOUNT_SUSPENDED`,
-`ACCOUNT_DISABLED` et `CSRF_FAILED`. Les codes métier prévus (`CONFLICT`,
-`GALLERY_LOCKED`, `INVALID_PASSWORD`, `INVALID_PIN`, `EXPIRED`,
-`QUOTA_EXCEEDED`, `NOT_CONFIGURED`) seront ajoutés avec leurs endpoints.
+`ACCOUNT_DISABLED` et `CSRF_FAILED`. Le lot A6 ajoute `CONFLICT` pour une course
+d'unicité détectée à l'insertion et `NOT_CONFIGURED` lorsque le plan Free n'est
+pas disponible. Les autres codes métier prévus (`GALLERY_LOCKED`,
+`INVALID_PASSWORD`, `INVALID_PIN`, `EXPIRED`, `QUOTA_EXCEEDED`) seront ajoutés
+avec leurs endpoints.
 
 Les détails de validation conservent les champs et les messages utiles, avec des
 clés en `camelCase`, y compris pour les structures imbriquées. Les erreurs
@@ -106,21 +110,108 @@ serializers doivent hériter de `PixeoSerializer` ou `PixeoModelSerializer`.
 
 ## 2. Authentification
 
-### 2.1 Endpoints implémentés en A5
+### 2.1 Endpoints implémentés
 
 | Méthode | Route | Authentification | Description |
 |---------|-------|------------------|-------------|
+| POST | `/api/v1/auth/register/` | Aucune (public) | Crée le compte photographe, l'abonnement Free, le branding et la homepage |
 | POST | `/api/v1/auth/login/` | CSRF | Vérifie e-mail + mot de passe ; retourne l'access token et pose le cookie de refresh |
 | POST | `/api/v1/auth/refresh/` | Cookie de refresh + CSRF | Effectue la rotation, blackliste l'ancien refresh et retourne un nouvel access token |
 | POST | `/api/v1/auth/logout/` | Cookie de refresh + CSRF | Blackliste le refresh s'il est valide et supprime le cookie |
 | GET | `/api/v1/auth/me/` | Bearer ou session Django | Retourne le profil courant, sans secret |
 | GET | `/api/v1/auth/csrf/` | Aucune | Pose le cookie CSRF et retourne le jeton à envoyer dans `X-CSRFToken` |
 
-Les endpoints d'inscription, de mise à jour du profil, de changement ou de
-réinitialisation de mot de passe ne sont **pas** implémentés en A5. Ils restent
-dans la cible des lots ultérieurs.
+Les endpoints de mise à jour du profil, de changement ou de réinitialisation de
+mot de passe, de vérification d'e-mail et d'envoi d'e-mail ne sont **pas**
+implémentés en A6. Ils restent dans la cible des lots ultérieurs.
 
-### 2.2 Tokens et cookies
+### 2.2 Inscription publique
+
+`POST /api/v1/auth/register/` crée un compte photographe et initialise son
+espace. L'endpoint est public, sans authentification et sans session.
+
+Corps JSON attendu :
+
+```json
+{
+  "email": "photographe@example.com",
+  "password": "MotDePasseSolide123!",
+  "passwordConfirmation": "MotDePasseSolide123!",
+  "brandingUsername": "studio-photo"
+}
+```
+
+| Champ | Règle |
+|-------|-------|
+| `email` | Obligatoire, valide, normalisé en minuscules, unique |
+| `password` | Obligatoire, validé par les validateurs Django, jamais retourné |
+| `passwordConfirmation` | Obligatoire, identique à `password` |
+| `brandingUsername` | Obligatoire, normalisé en minuscules, unique, compatible label DNS, 63 caractères maximum, noms réservés refusés |
+
+Règles appliquées :
+
+- tout champ supplémentaire est refusé, notamment `role`, `isStaff`,
+  `isSuperuser` et `planId` ;
+- le rôle est toujours imposé à `photographer` ; `is_staff` et `is_superuser`
+  restent à `false` ;
+- le mot de passe est hashé par Django et n'est jamais journalisé ni retourné ;
+- l'e-mail et le nom public sont vérifiés avant l'insertion, puis les contraintes
+  d'unicité de la base restent l'arbitre en cas de requête concurrente ;
+- une course d'unicité à l'insertion retourne `409 CONFLICT`, sans création
+  partielle ;
+- l'inscription est limitée par défaut à 3 requêtes par heure et par identité
+  réseau (`AUTH_REGISTER_RATE`) ;
+- l'endpoint accepte uniquement `application/json`. Il n'applique pas de
+  vérification CSRF car il ne lit ni cookie de session ni cookie de refresh et
+  ne crée aucune session ; le parser JSON strict et CORS empêchent une
+  soumission HTML cross-origin.
+
+Réponse `201 Created` :
+
+```json
+{
+  "ok": true,
+  "data": {
+    "user": {
+      "id": "00000000-0000-0000-0000-000000000000",
+      "email": "photographe@example.com",
+      "firstName": "",
+      "lastName": "",
+      "role": "photographer",
+      "brandingUsername": "studio-photo",
+      "isActive": true,
+      "isSuspended": false,
+      "dateJoined": "2026-11-04T00:00:00Z"
+    }
+  }
+}
+```
+
+Aucun access token, refresh token, cookie de session ou mot de passe n'est
+retourné. Le photographe se connecte ensuite via `POST /api/v1/auth/login/`.
+
+Création transactionnelle : le `User`, la `Subscription` Free active, les
+`BrandingSettings` et les `HomepageSettings` sont créés dans une seule
+transaction. Si l'une des étapes échoue, l'ensemble est annulé. Le plan Free est
+seedé par la migration `billing.0002_seed_free_plan`.
+
+Erreurs spécifiques :
+
+| Code | HTTP | Sens |
+|------|------|------|
+| `VALIDATION_ERROR` | 400 | Champ invalide, conflit de création, champ inconnu |
+| `CONFLICT` | 409 | Course d'unicité détectée à l'insertion |
+| `NOT_CONFIGURED` | 503 | Plan Free absent ou inactif |
+| `RATE_LIMITED` | 429 | Quota d'inscription dépassé |
+
+Les conflits d'e-mail ou de nom public renvoient une erreur non-field générique
+(`nonFieldErrors`) : la réponse ne distingue pas directement une adresse
+existante d'un nom public existant.
+
+Limites A6 : aucun envoi d'e-mail, aucune vérification d'e-mail, aucune
+connexion automatique, aucun paiement, aucune gestion de plan ou de profil.
+
+### 2.3 Tokens et cookies
 
 - L'identifiant de connexion est l'e-mail (`User.USERNAME_FIELD = "email"`) ; le
   modèle `User` n'a pas de champ `username`.
@@ -168,7 +259,7 @@ Exemple de réponse de connexion :
 Le cookie est posé dans l'en-tête `Set-Cookie` et n'est pas répété dans
 `data`. La réponse de refresh ne contient que `data.accessToken`.
 
-### 2.3 CSRF et CORS
+### 2.4 CSRF et CORS
 
 - `GET /api/v1/auth/csrf/` retourne `data.csrfToken` et pose le cookie CSRF
   Django. Le frontend envoie ce jeton dans `X-CSRFToken` pour `POST
@@ -194,7 +285,7 @@ Le cookie est posé dans l'en-tête `Set-Cookie` et n'est pas répété dans
 - Le cookie CSRF et le cookie de refresh restent host-only. Le frontend lit le
   jeton CSRF dans la réponse JSON, pas via `document.cookie`.
 
-### 2.4 Statut du compte et permissions
+### 2.5 Statut du compte et permissions
 
 - Un compte `is_active=False` est refusé avec `ACCOUNT_DISABLED`.
 - Un compte `is_suspended=True` est refusé avec `ACCOUNT_SUSPENDED`.
@@ -206,18 +297,23 @@ Le cookie est posé dans l'en-tête `Set-Cookie` et n'est pas répété dans
 - Un e-mail inconnu et un mot de passe incorrect renvoient la même réponse
   `401 INVALID_CREDENTIALS`, sans indiquer lequel est faux.
 
-### 2.5 Throttling
+### 2.6 Throttling
 
+- Inscription : 3 créations par heure et par identité réseau par défaut
+  (`AUTH_REGISTER_RATE`).
 - Connexion : 5 tentatives par minute et par identité réseau par défaut
   (`AUTH_LOGIN_RATE`).
 - Refresh : 30 renouvellements par minute et par identité réseau par défaut
   (`AUTH_REFRESH_RATE`).
 - Le dépassement retourne `429 RATE_LIMITED`. Le throttling DRF est une
-  protection complémentaire, pas une solution anti-brute-force complète ; en
-  production derrière un proxy, configurer correctement la confiance dans
-  `X-Forwarded-For`.
+  protection complémentaire, pas une solution anti-brute-force complète.
+- Par défaut, l'identité réseau est `REMOTE_ADDR` et `X-Forwarded-For` est
+  ignoré (`AUTH_TRUSTED_PROXY_COUNT=0`). Ne définir une valeur supérieure à 0
+  qu'après vérification du nombre exact de proxys de confiance ; le backend doit
+  alors être inaccessible directement pour qu'un client ne puisse pas forger
+  cet en-tête.
 
-### 2.6 Erreurs d'authentification
+### 2.7 Erreurs d'authentification et d'inscription
 
 | Code | HTTP | Sens |
 |------|------|------|
@@ -229,9 +325,16 @@ Le cookie est posé dans l'en-tête `Set-Cookie` et n'est pas répété dans
 | `ACCOUNT_SUSPENDED` | 403 | Compte suspendu |
 | `ACCOUNT_DISABLED` | 403 | Compte désactivé |
 | `CSRF_FAILED` | 403 | Jeton CSRF absent, invalide ou origine refusée |
-| `RATE_LIMITED` | 429 | Quota de tentatives dépassé |
+| `CONFLICT` | 409 | Course d'unicité pendant l'inscription |
+| `NOT_CONFIGURED` | 503 | Plan Free absent ou inactif |
+| `RATE_LIMITED` | 429 | Quota de tentatives ou d'inscriptions dépassé |
 
 ## 3. Studio (photographe authentifié)
+
+Les modèles `billing.Plan`, `billing.Subscription`, `studios.BrandingSettings`
+et `studios.HomepageSettings` existent depuis A6 et sont initialisés à
+l'inscription. Les endpoints de consultation ou de modification ci-dessous ne
+sont pas encore exposés.
 
 | Méthode | Route | Description |
 |---------|-------|-------------|
@@ -367,7 +470,7 @@ Toutes les routes admin exigent `role = platform_admin` et sont auditées.
 | GET | `/api/v1/redoc/` | ReDoc |
 
 Le préfixe public est `/api/<version>/`. Seule la version `v1` est autorisée en
-A5 ; une version inconnue est rejetée avec l'enveloppe d'erreur standard. Le
+A6 ; une version inconnue est rejetée avec l'enveloppe d'erreur standard. Le
 endpoint de santé est conservé hors routeur pour préserver exactement son
 contrat historique.
 

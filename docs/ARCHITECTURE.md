@@ -1,10 +1,12 @@
 # Pixeo — Architecture cible
 
-> **Statut : référence validée ; fondation A4 et authentification A5 réalisées.**
+> **Statut : référence validée ; fondations A4, authentification A5 et
+> inscription A6 réalisées.**
 > PostgreSQL, la migration initiale `accounts`, Django Admin, le health check
-> base et les endpoints d'authentification sont en place. Les modèles métier et
-> les endpoints métier seront ajoutés dans les lots suivants. Ce document décrit
-> la cible Django/DRF validée ; il ne remplace pas
+> base, les endpoints d'authentification et l'inscription transactionnelle avec
+> initialisation du plan Free, du branding et de la homepage sont en place. Les
+> autres modèles et endpoints métier seront ajoutés dans les lots suivants. Ce
+> document décrit la cible Django/DRF validée ; il ne remplace pas
 > `DEVELOPMENT_PROGRESS.md`, qui suit l'avancement réel.
 
 ## 1. Vue d'ensemble
@@ -85,7 +87,7 @@ Règles :
 - Les permissions sont explicites et testées.
 - Les opérations sensibles utilisent `transaction.atomic()`.
 
-### Structure backend en place (A5)
+### Structure backend en place (A6)
 
 ```text
 backend/
@@ -114,11 +116,26 @@ backend/
 │   │   │   ├── services.py   # vérification, rotation, révocation
 │   │   │   ├── cookies.py    # cookie refresh HttpOnly
 │   │   │   ├── csrf.py       # vérification CSRF ciblée
-│   │   │   ├── throttles.py  # login/refresh
+│   │   │   ├── throttles.py  # login/refresh/register
 │   │   │   └── exceptions.py # codes d'auth stables
+│   │   ├── registration/
+│   │   │   ├── serializers.py # validation publique stricte
+│   │   │   ├── services.py    # création transactionnelle de l'espace
+│   │   │   └── views.py       # POST /api/v1/auth/register/
 │   │   ├── migrations/
 │   │   │   └── 0001_initial.py
 │   │   └── tests/
+│   ├── billing/
+│   │   ├── models.py         # Plan, Subscription
+│   │   ├── admin.py
+│   │   └── migrations/
+│   │       ├── 0001_initial.py
+│   │       └── 0002_seed_free_plan.py
+│   ├── studios/
+│   │   ├── models.py         # BrandingSettings, HomepageSettings
+│   │   ├── admin.py
+│   │   └── migrations/
+│   │       └── 0001_initial.py
 │   └── api/
 │       ├── serializers.py    # PixeoSerializer, conversion camelCase
 │       ├── pagination.py     # page/page_size, enveloppe items/pageSize
@@ -158,9 +175,12 @@ Principes appliqués :
 - `PixeoJWTAuthentication` et `PixeoSessionAuthentication` rechargent le compte
   depuis la base à chaque requête et refusent un compte suspendu ou désactivé.
 - Le package `apps.accounts.auth` centralise les vues, serializers, cookies,
-  services de rotation, vérification CSRF, throttles et exceptions d'auth.
-- Django Admin expose le modèle `User` avec recherche, filtres rôle/statut,
-  formulaire de création sécurisé et hash de mot de passe en lecture seule.
+  services de rotation, vérification CSRF, throttles et exceptions d'auth. Le
+  package `apps.accounts.registration` isole la validation et le service
+  transactionnel d'inscription.
+- Django Admin expose `User` avec recherche, filtres rôle/statut, formulaire de
+  création sécurisé et hash de mot de passe en lecture seule, ainsi que `Plan`,
+  `Subscription`, `BrandingSettings` et `HomepageSettings`.
 - `User.clean()` impose qu'un superutilisateur conserve
   `role=platform_admin` ; les formulaires admin utilisent `full_clean()` et ne
   permettent donc pas de contourner cet invariant.
@@ -231,13 +251,14 @@ Règles de `branding_username` :
   `UserManager.get_by_natural_key()`.
 
 **Pas de champ `plan` sur `User`.** Le plan actif est porté par `Subscription`.
-`storage_used_bytes` n'est pas créé en A5 ; il sera ajouté avec la logique de
+`storage_used_bytes` n'est pas créé en A6 ; il sera ajouté avec la logique de
 quota, sans dupliquer le plan.
 
 La migration initiale `accounts.0001_initial` est versionnée et appliquée sur
 PostgreSQL. Elle crée `accounts_user` avec la clé primaire UUID et les
-contraintes `UNIQUE (email)` et `UNIQUE (branding_username)`. Aucun modèle métier
-n'est créé en A5.
+contraintes `UNIQUE (email)` et `UNIQUE (branding_username)`. A6 ajoute les
+applications `billing` et `studios`, leurs migrations initiales et la migration
+de données qui seed le plan Free.
 
 Django Admin applique les règles du modèle : le formulaire de création hash le
 mot de passe, le hash n'est jamais éditable, et `suspended_at` est maintenu en
@@ -246,21 +267,29 @@ cohérence avec `is_suspended`.
 ### `billing.Plan` et `billing.Subscription`
 
 - `Plan` : catalogue éditable par l'admin (`free`, `starter`, `pro`, `studio`),
-  prix FCFA, quota de stockage, fonctionnalités, ordre, actif.
+  prix FCFA, quota de stockage, fonctionnalités, ordre, actif. A6 seed uniquement
+  le plan `free` ; les autres formules seront ajoutées avec la facturation.
 - **Aucune limite de nombre de galeries**, quel que soit le plan. Seul le stockage
   est limité.
 - `Subscription` est la **source de vérité** du plan actif :
   `user`, `plan`, `status`, dates de période, `cancel_at_period_end`.
+- Un utilisateur ne peut avoir qu'une seule `Subscription` active à la fois
+  (contrainte partielle en base). Les abonnements résiliés restent conservés
+  pour l'historique.
+- À l'inscription, le service crée une souscription `active` au plan `free`.
 - En V1, le changement de plan est réservé à l'admin plateforme. Aucun paiement
   Stripe n'est intégré.
 
-### `studios.Branding` et `studios.HomepageSettings`
+### `studios.BrandingSettings` et `studios.HomepageSettings`
 
-- `Branding` : 1:1 avec `User` — logo, favicon, filigrane, domaine custom (V1 :
-  stocké mais non routé).
-- `HomepageSettings` : 1:1 avec `User` — activation, biographie, nom de marque,
-  mot de passe **hashé**.
-- Les galeries `pre-release` ne sont jamais listées sur la homepage.
+- `BrandingSettings` : 1:1 avec `User` — logo, favicon, filigrane, domaine custom
+  (V1 : stocké mais non routé). Le `branding_username` reste uniquement dans
+  `User`, pour éviter une duplication de la clé de tenant. À l'inscription, le
+  filigrane Free est activé avec le texte `Pixeo`.
+- `HomepageSettings` : 1:1 avec `User` — activation, biographie, nom de marque.
+  Le mot de passe de homepage hashé reste une évolution future : aucun champ ni
+  endpoint n'est ajouté tant que la fonctionnalité n'est pas implémentée.
+- Les galeries `pre-release` ne seront jamais listées sur la homepage.
 
 ### `galleries`
 
@@ -295,6 +324,27 @@ Points clés :
 - `platform.*` : paramètres globaux et journal d'audit admin.
 
 ## 5. Authentification et sessions
+
+### Inscription (A6)
+
+- `POST /api/v1/auth/register/` est public, JSON-only et ne crée aucune session :
+  aucun access token, refresh token ou cookie n'est retourné.
+- Le rôle est imposé côté serveur à `photographer` ; `is_staff`, `is_superuser`
+  et tout champ de plan fourni par le client sont refusés.
+- L'e-mail et le `branding_username` sont normalisés en minuscules, validés puis
+  protégés par les contraintes d'unicité de la base. Une course entre la
+  validation et l'insertion est convertie en `409 CONFLICT`.
+- La création du `User`, de la `Subscription` Free, des `BrandingSettings` et des
+  `HomepageSettings` est atomique. Une erreur sur une étape annule tout.
+- Le plan Free est seedé par migration ; son absence ou son inactivation renvoie
+  `503 NOT_CONFIGURED`, sans création partielle.
+- Le mot de passe est validé par les validateurs Django et hashé par le manager.
+  Il n'est jamais journalisé ni retourné.
+- L'endpoint n'applique pas de CSRF : il ne lit aucun cookie et ne crée aucune
+  session. La protection repose sur le parser JSON strict, CORS et un throttling
+  dédié (`AUTH_REGISTER_RATE`, 3/heure par défaut).
+- Aucune connexion automatique, aucun envoi d'e-mail et aucune vérification
+  d'e-mail ne sont réalisés en A6.
 
 ### Photographe / admin
 
@@ -367,7 +417,7 @@ Abstraction via le backend de stockage Django :
 
 ## 7. API
 
-- Préfixe : `/api/<version>/`, avec `v1` comme seule version autorisée en A5.
+- Préfixe : `/api/<version>/`, avec `v1` comme seule version autorisée en A6.
 - Réponses de succès : `{"ok": true, "data": ...}`.
 - Erreurs uniformes : `{"ok": false, "error", "code", "details"}` ; codes
   stables, détails de validation conservés, aucune fuite interne.
@@ -375,7 +425,9 @@ Abstraction via le backend de stockage Django :
   `items`, `total`, `page`, `pageSize`.
 - Conversion `camelCase` centralisée dans les serializers.
 - Authentification : access JWT Bearer, refresh cookie HttpOnly, rotation,
-  blacklist et CSRF sur login/refresh/logout. Routes sous `/api/v1/auth/`.
+  blacklist et CSRF sur login/refresh/logout. L'inscription publique
+  `/api/v1/auth/register/` est JSON-only, sans session. Routes sous
+  `/api/v1/auth/`.
 - Permissions de base : `IsPhotographer`, `IsPlatformAdmin`, `AllowAny` explicite
   pour les vues publiques. Les permissions de rôle contrôlent aussi le statut.
 - Documentation OpenAPI générée avec `drf-spectacular` : `/api/v1/schema/`,
@@ -389,10 +441,12 @@ Abstraction via le backend de stockage Django :
 
 - Isolation stricte par tenant dans les vues, querysets, serializers et permissions.
 - Aucun accès à un objet d'un autre photographe, même avec un UUID valide.
-- Rate limiting sur connexion et refresh (5/min et 30/min par défaut), ainsi que
-  sur les futurs mots de passe de galerie, codes d'accès et PIN.
-- Transactions pour inscription, changement de plan, suppression de collection,
-  retrait de photos, création de partage.
+- Rate limiting sur inscription (3/heure), connexion (5/min) et refresh
+  (30/min) par défaut, ainsi que sur les futurs mots de passe de galerie, codes
+  d'accès et PIN.
+- Transactions pour l'inscription et l'initialisation de l'espace, le changement
+  de plan, la suppression de collection, le retrait de photos et la création de
+  partage.
 - Validation des uploads : type MIME, taille, dimensions, nom de fichier.
 - Pas de succès simulé : une fonctionnalité non configurée renvoie une erreur
   explicite (`not_configured`) ou est désactivée.
@@ -400,8 +454,9 @@ Abstraction via le backend de stockage Django :
 - Aucun mot de passe, hash, access token ou refresh token n'est journalisé ou
   renvoyé dans les réponses. Les erreurs d'authentification sont génériques.
 - CSRF obligatoire sur les opérations qui créent ou consomment le cookie de
-  refresh (`login`, `refresh`, `logout`) ; CORS restrictif avec credentials ;
-  cookies host-only par défaut. CORS ne remplace pas CSRF.
+  refresh (`login`, `refresh`, `logout`) ; l'inscription publique est protégée
+  par JSON-only, CORS et throttling, sans cookie ni session. CORS restrictif
+  avec credentials ; cookies host-only par défaut. CORS ne remplace pas CSRF.
 
 ## 9. Hors périmètre V1
 

@@ -27,9 +27,11 @@ PRODUCTION_ENV = {
     "DJANGO_ALLOWED_HOSTS": "api.pixeo.com,app.pixeo.com,admin.pixeo.com,.pixeo.com",
     "DJANGO_LOG_LEVEL": "INFO",
     "DATABASE_URL": "postgresql://pixeo:pixeo@localhost:5432/pixeo",
-    "CORS_ALLOWED_ORIGINS": "https://app.pixeo.com",
-    "CORS_ALLOWED_ORIGIN_REGEXES": r"^https://[a-z0-9-]+\.pixeo\.com$",
-    "CSRF_TRUSTED_ORIGINS": "https://app.pixeo.com,https://*.pixeo.com",
+    "CORS_ALLOWED_ORIGINS": "https://app.pixeo.com,https://admin.pixeo.com",
+    "CORS_ALLOWED_ORIGIN_REGEXES": "",
+    "CSRF_TRUSTED_ORIGINS": (
+        "https://app.pixeo.com,https://admin.pixeo.com,https://api.pixeo.com"
+    ),
     "CACHE_URL": "redis://localhost:6379/0",
     "SECURE_SSL_REDIRECT": "True",
     "SECURE_HSTS_SECONDS": "31536000",
@@ -91,6 +93,7 @@ def test_auth_settings_are_centralized_and_secure():
     assert settings.AUTH_REFRESH_COOKIE_SAMESITE == "Lax"
     assert settings.AUTH_REFRESH_COOKIE_DOMAIN is None
     assert settings.AUTH_REFRESH_COOKIE_SECURE is False
+    assert settings.AUTH_TRUSTED_PROXY_COUNT == 0
     assert settings.CSRF_COOKIE_HTTPONLY is False
     assert settings.CSRF_COOKIE_SAMESITE == "Lax"
     assert settings.CSRF_COOKIE_DOMAIN is None
@@ -99,7 +102,24 @@ def test_auth_settings_are_centralized_and_secure():
     assert settings.REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"] == {
         "auth_login": "5/min",
         "auth_refresh": "30/min",
+        "auth_register": "3/hour",
     }
+
+
+def test_production_test_env_does_not_authorize_tenant_subdomains():
+    assert PRODUCTION_ENV["CORS_ALLOWED_ORIGIN_REGEXES"] == ""
+
+    cors_origins = set(PRODUCTION_ENV["CORS_ALLOWED_ORIGINS"].split(","))
+    assert {"https://app.pixeo.com", "https://admin.pixeo.com"} <= cors_origins
+    assert all("*" not in origin for origin in cors_origins)
+
+    csrf_origins = set(PRODUCTION_ENV["CSRF_TRUSTED_ORIGINS"].split(","))
+    assert {
+        "https://app.pixeo.com",
+        "https://admin.pixeo.com",
+        "https://api.pixeo.com",
+    } <= csrf_origins
+    assert all("*" not in origin for origin in csrf_origins)
 
 
 def test_development_settings_enable_debug_when_requested():

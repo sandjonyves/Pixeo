@@ -1,13 +1,15 @@
 # Pixeo — Backend Django
 
-> **Statut : lot A5.** PostgreSQL 17.6 est disponible via Docker Compose, la
-> migration initiale `accounts.0001_initial` est versionnée et appliquée, Django
-> Admin gère le modèle utilisateur Pixeo et le health check vérifie réellement la
-> base. La fondation API REST et l'authentification JWT sont en place :
-> versionnement `/api/v1/`, enveloppes de réponse, erreurs centralisées,
-> pagination, permissions, camelCase, OpenAPI, login/refresh/logout/profil,
-> cookie HttpOnly, rotation/blacklist et CSRF/CORS. Aucun endpoint métier,
-> d'inscription ou de paiement n'est encore exposé.
+> **Statut : lot A6.** PostgreSQL 17.6 est disponible via Docker Compose, les
+> migrations `accounts`, `billing` et `studios` sont versionnées et appliquées,
+> Django Admin gère les modèles Pixeo et le health check vérifie réellement la
+> base. La fondation API REST, l'authentification JWT et l'inscription publique
+> sont en place : versionnement `/api/v1/`, enveloppes de réponse, erreurs
+> centralisées, pagination, permissions, camelCase, OpenAPI,
+> register/login/refresh/logout/profil, cookie HttpOnly, rotation/blacklist,
+> CSRF/CORS et initialisation transactionnelle du plan Free, du branding et de
+> la homepage. Aucun endpoint de galerie, photo, paiement ou e-mail réel n'est
+> encore exposé.
 
 ## 1. Prérequis
 
@@ -112,10 +114,18 @@ python manage.py migrate
 python manage.py showmigrations
 ```
 
-La migration initiale est `backend/apps/accounts/migrations/0001_initial.py`.
-Elle crée `accounts.User` avec une clé primaire UUID, l'e-mail unique et le
-`branding_username` unique. Les migrations font partie du code source et doivent
-être versionnées.
+Les migrations présentes sont :
+
+- `backend/apps/accounts/migrations/0001_initial.py` : `accounts.User` avec clé
+  primaire UUID, e-mail unique et `branding_username` unique (A2/A3) ;
+- `backend/apps/billing/migrations/0001_initial.py` : `Plan`, `Subscription` (A6) ;
+- `backend/apps/billing/migrations/0002_seed_free_plan.py` : seed du plan Free (A6) ;
+- `backend/apps/studios/migrations/0001_initial.py` : `BrandingSettings`,
+  `HomepageSettings` (A6).
+
+Les migrations font partie du code source et doivent être versionnées. La
+migration de données crée le plan Free utilisé par l'inscription ; elle ne
+supprime aucune donnée existante.
 
 ## 5. Superutilisateur et Django Admin
 
@@ -151,7 +161,7 @@ lorsqu'un administrateur active ou retire la suspension. Un superutilisateur doi
 conserver `role=platform_admin` : le formulaire admin refuse toute combinaison
 contraire via `full_clean()`.
 
-## 6. Fondation API REST (A4) et authentification (A5)
+## 6. Fondation API REST (A4), authentification (A5) et inscription (A6)
 
 L'API publique est versionnée sous `/api/v1/`. Le routeur DRF est défini dans
 `apps/api/urls.py` ; les routes d'authentification y sont montées sous
@@ -207,17 +217,37 @@ rechargent le compte à chaque requête ; une suspension ou une désactivation e
 donc appliquée immédiatement, même avec un ancien token. L'isolation
 multi-tenant sera ajoutée dans les lots métier.
 
-### Authentification A5
+### Authentification A5 et inscription A6
 
 | Méthode | URL | Rôle |
 |---------|-----|------|
+| POST | `/api/v1/auth/register/` | Crée un compte photographe, son abonnement Free, son branding et sa homepage (JSON-only, public) |
 | POST | `/api/v1/auth/login/` | Vérifie les identifiants, retourne l'access token et pose le cookie de refresh (CSRF + JSON obligatoires) |
 | POST | `/api/v1/auth/refresh/` | Rotation du refresh token, protégée par CSRF |
 | POST | `/api/v1/auth/logout/` | Blacklist du refresh et suppression du cookie, protégé par CSRF |
 | GET | `/api/v1/auth/me/` | Profil courant sans mot de passe ni jeton |
 | GET | `/api/v1/auth/csrf/` | Retourne un jeton CSRF et pose le cookie CSRF |
 
-Règles appliquées :
+Règles d'inscription A6 :
+
+- `POST /api/v1/auth/register/` accepte uniquement du JSON et ne crée aucune
+  session : aucun access token, refresh token ou cookie n'est retourné ;
+- champs attendus : `email`, `password`, `passwordConfirmation`,
+  `brandingUsername` ; tout champ supplémentaire est refusé ;
+- le rôle est toujours imposé à `photographer` ; `is_staff` et `is_superuser`
+  restent à `false` ;
+- le mot de passe est validé par les validateurs Django et hashé ; il n'est
+  jamais retourné ni journalisé ;
+- le `User`, la `Subscription` Free active, les `BrandingSettings` et les
+  `HomepageSettings` sont créés dans une transaction unique ;
+- le plan Free est seedé par migration ; une course d'unicité retourne
+  `409 CONFLICT`, l'absence du plan retourne `503 NOT_CONFIGURED` ;
+- l'inscription est limitée à 3 requêtes/heure par identité réseau par défaut
+  (`AUTH_REGISTER_RATE`) ;
+- aucune connexion automatique n'est effectuée : le client appelle ensuite
+  `/api/v1/auth/login/`.
+
+Règles de session A5 :
 
 - l'access token est un JWT de 10 minutes par défaut, envoyé dans
   `Authorization: Bearer <token>` et conservé en mémoire côté frontend ;
@@ -238,8 +268,8 @@ Règles appliquées :
 - aucun refresh token, mot de passe ou hash n'est renvoyé ou journalisé.
 
 Un logout révoque le refresh, mais un access token déjà émis reste valide
-jusqu'à son expiration. Aucun endpoint d'inscription, de changement de mot de
-passe ou de récupération de mot de passe n'est exposé en A5.
+jusqu'à son expiration. A5 n'expose pas encore l'inscription (ajoutée en A6),
+ni le changement ou la récupération de mot de passe.
 
 ## 7. Health endpoint
 
@@ -296,8 +326,10 @@ La réponse n'expose ni identifiants, ni hôte, ni détail d'exception.
 | `AUTH_REFRESH_COOKIE_DOMAIN` | Vide = cookie host-only |
 | `AUTH_ACCESS_TOKEN_LIFETIME_MINUTES` | Durée de l'access token (10 par défaut) |
 | `AUTH_REFRESH_TOKEN_LIFETIME_DAYS` | Durée du refresh token (7 par défaut) |
+| `AUTH_REGISTER_RATE` | Quota inscription (`3/hour` par défaut) |
 | `AUTH_LOGIN_RATE` | Quota login (`5/min` par défaut) |
 | `AUTH_REFRESH_RATE` | Quota refresh (`30/min` par défaut) |
+| `AUTH_TRUSTED_PROXY_COUNT` | Nombre exact de proxys de confiance ; `0` = ignorer `X-Forwarded-For` |
 | `CSRF_COOKIE_PATH`, `CSRF_COOKIE_SAMESITE` | Cookie CSRF ; `/` et `Lax` par défaut |
 | `STORAGE_BACKEND` | `local` ou `s3` |
 | `S3_*` | Configuration S3 / Cloudflare R2 |
@@ -316,11 +348,11 @@ source .venv/bin/activate
 # Tests d'intégration sur PostgreSQL (base de test créée par pytest)
 pytest -q
 
-# Tests ciblés de la fondation API et de l'authentification
-pytest apps/api/tests apps/accounts/tests/test_auth_*.py -q
+# Tests ciblés de la fondation API, de l'authentification et de l'inscription
+pytest apps/api/tests apps/accounts/tests/test_auth_*.py apps/billing/tests apps/studios/tests -q
 
 # Même suite avec application des migrations dans la base de test
-pytest -q -o addopts=''
+pytest -q -o addopts='' --create-db
 
 # Tests unitaires isolés sur SQLite en mémoire
 DATABASE_URL='sqlite:///:memory:' pytest -q
@@ -339,7 +371,7 @@ python manage.py spectacular --validate --file /tmp/pixeo-openapi.yaml
 test est alors créée par syncdb. L'option `-o addopts=''` ci-dessus retire
 `--no-migrations` et applique réellement les migrations. La base PostgreSQL
 persistante `pixeo` n'est pas utilisée par pytest : pytest crée et détruit une
-base de test séparée. La suite A5 compte **217 tests**.
+base de test séparée. La suite A6 compte **277 tests**.
 
 Pour la vérification production, fournir au minimum `DJANGO_SECRET_KEY`,
 `DJANGO_ALLOWED_HOSTS`, `DATABASE_URL` PostgreSQL, `CACHE_URL`, au moins une
@@ -355,6 +387,7 @@ passe à `True` et les cookies CSRF/session sont `Secure` en production.
 | GET | `/api/v1/schema/` | Schéma OpenAPI (`?format=json` pour JSON) |
 | GET | `/api/v1/docs/` | Documentation Swagger UI |
 | GET | `/api/v1/redoc/` | Documentation ReDoc |
+| POST | `/api/v1/auth/register/` | Inscription publique et initialisation de l'espace |
 | POST | `/api/v1/auth/login/` | Connexion et cookie de refresh |
 | POST | `/api/v1/auth/refresh/` | Rotation du refresh, avec CSRF |
 | POST | `/api/v1/auth/logout/` | Révocation du refresh, avec CSRF |
@@ -365,6 +398,7 @@ passe à `True` et les cookies CSRF/session sont `Secure` en production.
 La documentation OpenAPI est publique en développement et réservée aux
 administrateurs authentifiés par session Django en production.
 
-Aucun endpoint d'inscription, de galerie, de photo, d'abonnement ou de paiement
-n'existe encore. Les endpoints `PATCH /auth/me/`, de changement de mot de passe
-et de réinitialisation restent à implémenter dans les lots ultérieurs.
+Aucun endpoint de galerie, de photo, d'abonnement payant ou de paiement n'existe
+encore. Les endpoints `PATCH /auth/me/`, de changement de mot de passe, de
+réinitialisation, de vérification d'e-mail et de gestion du branding/homepage
+restent à implémenter dans les lots ultérieurs.

@@ -1,10 +1,11 @@
 # Pixeo — Développement local et sous-domaines
 
-> **Statut : lot A5.** PostgreSQL 17.6 est disponible via Docker Compose, la
-> migration initiale `accounts.0001_initial` est appliquée, Django Admin gère le
-> modèle utilisateur, le health check vérifie la base et l'authentification JWT
-> (login, refresh, logout, profil, CSRF/CORS) est en place. Aucun endpoint
-> métier, d'inscription ou de paiement n'est encore exposé.
+> **Statut : lot A6.** PostgreSQL 17.6 est disponible via Docker Compose, les
+> migrations `accounts`, `billing` et `studios` sont appliquées, Django Admin
+> gère les modèles, le health check vérifie la base, l'authentification JWT
+> (login, refresh, logout, profil, CSRF/CORS) et l'inscription publique avec
+> initialisation du plan Free, du branding et de la homepage sont en place.
+> Aucun endpoint de galerie, photo, paiement ou e-mail réel n'est encore exposé.
 
 ## 1. Prérequis
 
@@ -257,12 +258,18 @@ En production, ces trois routes de documentation sont réservées aux
 administrateurs authentifiés via la session Django. Le health check reste
 disponible publiquement pour les sondes d'infrastructure.
 
-### Tester l'authentification en local
+### Tester l'inscription et l'authentification en local
 
 Les placeholders `<email>`, `<password>` et `<csrfToken>` sont à remplacer. Le
 fichier `cookies.txt` est local et ne doit pas être versionné.
 
 ```bash
+# 0. Créer un photographe (public, JSON-only, sans CSRF ni session)
+curl -s -X POST \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"<email>","password":"<password>","passwordConfirmation":"<password>","brandingUsername":"studio-photo"}' \
+  http://api.lvh.me:8000/api/v1/auth/register/
+
 # 1. Obtenir un jeton CSRF et le cookie CSRF
 curl -s -c cookies.txt http://api.lvh.me:8000/api/v1/auth/csrf/
 
@@ -311,7 +318,7 @@ docker compose exec postgres pg_isready -U pixeo -d pixeo
 .venv/bin/python -m pytest -q
 
 # Suite avec migrations réellement appliquées à la base de test
-.venv/bin/python -m pytest -q -o addopts=''
+.venv/bin/python -m pytest -q -o addopts='' --create-db
 
 # Tests unitaires SQLite en mémoire
 DATABASE_URL='sqlite:///:memory:' .venv/bin/python -m pytest -q

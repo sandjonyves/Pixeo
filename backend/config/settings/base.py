@@ -36,6 +36,8 @@ INSTALLED_APPS = [
     "rest_framework",
     "rest_framework_simplejwt.token_blacklist",
     "apps.accounts",
+    "apps.billing",
+    "apps.studios",
     "apps.api",
 ]
 
@@ -222,8 +224,14 @@ REST_FRAMEWORK = {
     "DEFAULT_THROTTLE_RATES": {
         "auth_login": env("AUTH_LOGIN_RATE", default="5/min"),
         "auth_refresh": env("AUTH_REFRESH_RATE", default="30/min"),
+        "auth_register": env("AUTH_REGISTER_RATE", default="3/hour"),
     },
 }
+
+# Nombre exact de proxys de confiance devant l'API. La valeur 0 (défaut)
+# interdit la lecture de X-Forwarded-For et utilise REMOTE_ADDR. DRF NUM_PROXIES
+# n'est volontairement pas utilisé : la topologie réelle n'est pas vérifiée.
+AUTH_TRUSTED_PROXY_COUNT = env.int("AUTH_TRUSTED_PROXY_COUNT", default=0)
 
 # ─── JWT ──────────────────────────────────────────────────────────────────────
 SIMPLE_JWT = {
