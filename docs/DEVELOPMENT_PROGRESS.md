@@ -1,8 +1,8 @@
 # Pixeo — Développement backend
 
-> Dernière mise à jour : 2026-11-14
-> Lot en cours : **A6 — Inscription des photographes et initialisation de leur
-> espace Pixeo** (réalisé, validé)
+> Dernière mise à jour : 2026-11-19
+> Lot en cours : **A7 — Création du modèle de données des galeries Pixeo**
+> (réalisé, validé)
 
 ## 1. Méthode de travail
 
@@ -28,6 +28,7 @@ n'est modifié par les lots backend avant la Phase E.
 | A | **A4** | Fondation API REST : versionnement, erreurs, pagination, camelCase, permissions, OpenAPI | **Réalisé — validé** |
 | A | **A5** | Authentification JWT, cookie refresh, rotation/blacklist, CSRF/CORS, profil courant | **Réalisé — validé** |
 | A | **A6** | Inscription publique, plan Free, branding, homepage initiale | **Réalisé — validé** |
+| A | **A7** | Modèle `Gallery`, contrainte slug par photographe, admin et migration | **Réalisé — validé** |
 | B | — | Studio, branding, homepage, plans/abonnements | Partiellement préparé par A6 (modèles initiaux) |
 | C | — | Collections, photos, stockage, accès publics, favoris/notes | Non démarré |
 | D | — | Intégration frontend et retrait du `localStorage` | Non démarré |
@@ -363,7 +364,87 @@ n'est ajouté en A6.
   8 modifications frontend préexistantes.
 - `origin/main` reste sur le commit A5 `d27e3f0`.
 
-## 10. Décisions structurantes
+## 10. Lot A7 — modèle de données des galeries
+
+### Livrables
+
+| Élément | Chemin | État |
+|---------|--------|------|
+| Application galleries | `backend/apps/galleries/` | Créée |
+| Modèle Gallery | `backend/apps/galleries/models.py` | Créé |
+| Statuts de galerie | `backend/apps/galleries/models.py` | Ajoutés |
+| Administration | `backend/apps/galleries/admin.py` | Créée |
+| Migration initiale | `backend/apps/galleries/migrations/0001_initial.py` | Créée |
+| Migration des contraintes | `backend/apps/galleries/migrations/0002_gallery_constraints.py` | Créée |
+| Tests du modèle | `backend/apps/galleries/tests/test_models.py` | Créés |
+| Tests de l'admin | `backend/apps/galleries/tests/test_admin.py` | Créés |
+| Settings | `backend/config/settings/base.py` | Application enregistrée |
+| Documentation | `docs/ARCHITECTURE.md`, `docs/DEVELOPMENT_PROGRESS.md` | Mise à jour |
+
+Aucun serializer, view, endpoint, route publique, upload, modèle `Photo` ou
+`PhotoSet`, PIN ou mot de passe de galerie n'est ajouté en A7. Les
+fonctionnalités A5/A6 et le frontend restent inchangés ; seul l'enregistrement
+de `apps.galleries` est ajouté aux settings.
+
+### Modèle et contraintes
+
+- `Gallery.id` : `UUIDField`, clé primaire générée par `uuid.uuid4`.
+- `Gallery.photographer` : clé étrangère obligatoire vers `AUTH_USER_MODEL`,
+  avec `on_delete=CASCADE`.
+- `Gallery.title` : `CharField(max_length=150)`, non vide.
+- `Gallery.slug` : `SlugField(max_length=100)`, non vide.
+- `Gallery.description` : `TextField` facultatif, vide par défaut.
+- `Gallery.status` : `draft`, `published`, `hidden` ou `pre_release`, avec
+  `draft` par défaut.
+- `Gallery.published_at` : `DateTimeField` nullable et facultatif.
+- `Gallery.created_at` et `Gallery.updated_at` : dates automatiques.
+- Contrainte `UniqueConstraint(fields=["photographer", "slug"])` nommée
+  `unique_gallery_slug_per_photographer`.
+- Contraintes SQL `CHECK` `gallery_title_not_empty` et
+  `gallery_slug_not_empty` : les champs ne peuvent pas être vides, même via
+  `save()`, `objects.create()` ou `bulk_create()`.
+- Contrainte SQL `CHECK` `gallery_status_valid` : seules les quatre valeurs
+  autorisées peuvent être enregistrées.
+- `Gallery.clean()` et `Gallery.save()` refusent un propriétaire dont le rôle
+  n'est pas `photographer`. Une contrainte SQL ne peut pas vérifier le rôle
+  d'une table liée ; les créations de masse doivent passer par un service qui
+  appelle `full_clean()`.
+- Ordre par défaut : `-created_at`.
+- La suppression du photographe supprime ses galeries.
+- L'admin affiche titre, photographe, slug, statut et date de création ; il
+  filtre par statut, recherche par titre ou slug et expose les dates en lecture
+  seule.
+
+### Vérifications réellement exécutées
+
+| Vérification | Résultat |
+|--------------|----------|
+| `pytest -q apps/galleries` | **24 passed** |
+| `pytest -q` PostgreSQL (`--no-migrations`) | **301 passed** |
+| `pytest -q -o addopts='' --create-db` avec migrations | **301 passed** |
+| `DATABASE_URL='sqlite:///:memory:' pytest -q` | **301 passed** |
+| `DATABASE_URL='sqlite:///:memory:' pytest -q -o addopts='' --create-db` | **301 passed** |
+| `python manage.py check` | `System check identified no issues (0 silenced).` |
+| `python manage.py makemigrations --check --dry-run` | `No changes detected` |
+| `python -m pip check` | `No broken requirements found.` |
+| `git diff --check` | Aucun problème |
+| Migrations `galleries.0001_initial` et `0002_gallery_constraints` | Appliquées sur PostgreSQL de développement |
+| Table `galleries_gallery` | Présente, contrainte unique `(photographer_id, slug)` et trois contraintes `CHECK` |
+| Tests SQL directs | `save()`, `objects.create()` et `bulk_create()` refusent titre/slug vides et statut invalide |
+| Tests du propriétaire | `full_clean()`, `save()` et `objects.create()` refusent un `platform_admin` |
+| Données existantes | Compte admin et plan Free conservés ; 0 galerie |
+
+### État de la base et Git
+
+- PostgreSQL local `pixeo` : compte `admin@pixeo.test` conservé, plan Free
+  actif, aucune galerie persistante.
+- Les migrations A1–A6 n'ont pas été modifiées.
+- A7 est implémenté, vérifié et validé ; il est commité localement et non
+  poussé.
+- `origin/main` reste sur le commit A5 `d27e3f0`.
+- Les huit modifications frontend préexistantes restent intactes.
+
+## 11. Décisions structurantes
 
 - Nom officiel : **Pixeo**. Aucune référence à SimpleShoot.
 - Tenant = `accounts.User` via `branding_username` ; pas de modèle `Tenant`.
@@ -414,8 +495,10 @@ n'est ajouté en A6.
   `branding_username`.
 - Aucune connexion automatique après inscription : le client appelle ensuite
   `/api/v1/auth/login/`.
+- Le modèle A7 `Gallery` utilise le statut `pre_release` (underscore), un slug
+  unique par photographe et une suppression en cascade avec le photographe.
 
-## 11. Problèmes rencontrés et points d'attention
+## 12. Problèmes rencontrés et points d'attention
 
 ### Problèmes résolus pendant A1
 
@@ -524,10 +607,25 @@ n'est ajouté en A6.
   `X-Forwarded-For` que si `AUTH_TRUSTED_PROXY_COUNT` est explicitement
   configuré après vérification de la topologie du reverse proxy.
 
+### Problèmes résolus pendant A7
+
+- `save()` et `objects.create()` ne déclenchent pas `full_clean()` : des chaînes
+  vides pouvaient être persistées. Des contraintes SQL `CHECK` couvrent
+  désormais les écritures directes et les opérations de masse.
+- Un statut hors énumération pouvait être inséré directement. La contrainte
+  `gallery_status_valid` limite les valeurs au niveau PostgreSQL et SQLite.
+- Un `platform_admin` pouvait être propriétaire d'une galerie. `Gallery.clean()`
+  et `Gallery.save()` refusent ce rôle ; la règle inter-tables ne peut pas être
+  une simple contrainte SQL. Les imports de masse devront passer par un service
+  appelant `full_clean()`.
+- Les tests distinguent la validation Django (`full_clean()`), les écritures
+  `save()`/`objects.create()` et les contraintes réellement appliquées par la
+  base.
+
 ### Points d'attention
 
 - **Travail frontend antérieur non commité** : 8 fichiers modifiés (limites de
-  galeries) ont été laissés intacts pendant A1 à A6. Ils devront être commités
+  galeries) ont été laissés intacts pendant A1 à A7. Ils devront être commités
   séparément après validation.
 - Le superutilisateur créé pour la validation A3 est local ; son mot de passe
   n'est pas versionné. Il devra être remplacé par un compte de production créé
@@ -541,17 +639,18 @@ n'est ajouté en A6.
 - Les dépendances de test (pytest, pytest-django) sont maintenant dans
   `backend/requirements-dev.txt`.
 
-## 12. Prochain lot
+## 13. Prochain lot
 
-**A7 — non démarré.**
+**Lot suivant — non démarré.**
 
-- A6 est implémenté, vérifié et commité localement, sans push.
-- Aucun lot suivant (A7, galeries, photos, abonnements payants, e-mails réels)
+- A6 est commité localement (`bcd36ea`) ; A7 est implémenté, vérifié et
+  commité localement, sans push.
+- Aucun lot suivant (photos, collections, abonnements payants, e-mails réels)
   n'est démarré.
 - `origin/main` pointe sur le commit A5 `d27e3f0`.
-- Le commit A6 a été créé séparément après validation, sans amendement de A5.
+- A7 a été commité localement après validation, sans push.
 
-## 13. Commandes utiles
+## 14. Commandes utiles
 
 ```bash
 # Backend
@@ -574,6 +673,7 @@ python manage.py migrate
 python manage.py showmigrations
 
 # Tests
+pytest -q apps/galleries
 pytest -q
 pytest -q -o addopts='' --create-db
 DATABASE_URL='sqlite:///:memory:' pytest -q

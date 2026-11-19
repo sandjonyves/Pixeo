@@ -38,6 +38,7 @@ INSTALLED_APPS = [
     "apps.accounts",
     "apps.billing",
     "apps.studios",
+    "apps.galleries",
     "apps.api",
 ]
 

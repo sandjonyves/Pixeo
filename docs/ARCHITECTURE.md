@@ -1,13 +1,14 @@
 # Pixeo — Architecture cible
 
-> **Statut : référence validée ; fondations A4, authentification A5 et
-> inscription A6 réalisées.**
+> **Statut : référence validée ; fondations A4, authentification A5,
+> inscription A6 et modèle de galerie A7 réalisés.**
 > PostgreSQL, la migration initiale `accounts`, Django Admin, le health check
-> base, les endpoints d'authentification et l'inscription transactionnelle avec
-> initialisation du plan Free, du branding et de la homepage sont en place. Les
-> autres modèles et endpoints métier seront ajoutés dans les lots suivants. Ce
-> document décrit la cible Django/DRF validée ; il ne remplace pas
-> `DEVELOPMENT_PROGRESS.md`, qui suit l'avancement réel.
+> base, les endpoints d'authentification, l'inscription transactionnelle avec
+> initialisation du plan Free, du branding et de la homepage, ainsi que le
+> modèle `galleries.Gallery` sont en place. Les autres modèles et endpoints
+> métier seront ajoutés dans les lots suivants. Ce document décrit la cible
+> Django/DRF validée ; il ne remplace pas `DEVELOPMENT_PROGRESS.md`, qui suit
+> l'avancement réel.
 
 ## 1. Vue d'ensemble
 
@@ -87,7 +88,7 @@ Règles :
 - Les permissions sont explicites et testées.
 - Les opérations sensibles utilisent `transaction.atomic()`.
 
-### Structure backend en place (A6)
+### Structure backend en place (A7)
 
 ```text
 backend/
@@ -136,6 +137,12 @@ backend/
 │   │   ├── admin.py
 │   │   └── migrations/
 │   │       └── 0001_initial.py
+│   ├── galleries/
+│   │   ├── models.py         # Gallery, GalleryStatus
+│   │   ├── admin.py
+│   │   └── migrations/
+│   │       ├── 0001_initial.py
+│   │       └── 0002_gallery_constraints.py
 │   └── api/
 │       ├── serializers.py    # PixeoSerializer, conversion camelCase
 │       ├── pagination.py     # page/page_size, enveloppe items/pageSize
@@ -290,6 +297,43 @@ cohérence avec `is_suspended`.
   Le mot de passe de homepage hashé reste une évolution future : aucun champ ni
   endpoint n'est ajouté tant que la fonctionnalité n'est pas implémentée.
 - Les galeries `pre-release` ne seront jamais listées sur la homepage.
+
+### `galleries.Gallery` (A7)
+
+Le lot A7 introduit le premier modèle métier de l'application `galleries`. Il
+ne remplace pas les modèles cibles `Collection`, `CollectionSet` ou `Photo`, qui
+restent non démarrés.
+
+- `id` : UUID, clé primaire générée automatiquement.
+- `photographer` : clé étrangère obligatoire vers `AUTH_USER_MODEL`, avec
+  suppression en cascade lorsque le photographe est supprimé.
+- `title` : texte obligatoire, 150 caractères maximum.
+- `slug` : slug obligatoire, 100 caractères maximum.
+- `description` : texte facultatif, vide par défaut.
+- `status` : `draft`, `published`, `hidden` ou `pre_release`, avec `draft` par
+  défaut.
+- `published_at` : date facultative (nullable), renseignée ultérieurement par
+  la logique métier.
+- `created_at` et `updated_at` : dates automatiques.
+
+Contraintes :
+
+- unicité en base de `(photographer, slug)` : le même slug est autorisé pour
+  deux photographes différents, mais pas deux fois pour le même photographe ;
+- contraintes SQL `CHECK` garantissant que `title` et `slug` ne sont jamais
+  vides, même via `save()`, `objects.create()` ou `bulk_create()` ;
+- contrainte SQL `CHECK` limitant `status` à `draft`, `published`, `hidden` et
+  `pre_release` ;
+- `Gallery.clean()` et `Gallery.save()` refusent un propriétaire qui n'a pas le
+  rôle `photographer` ; cette règle inter-tables ne peut pas être exprimée par
+  une simple contrainte SQL. Les créations de masse doivent passer par un
+  service qui appelle `full_clean()` ;
+- aucune galerie n'est partagée entre plusieurs photographes ;
+- l'administration permet la liste, le filtre par statut, la recherche par titre
+  ou slug, et expose les dates en lecture seule.
+
+Aucun serializer, endpoint, upload, mot de passe de galerie ou modèle `Photo`
+n'est ajouté en A7.
 
 ### `galleries`
 
