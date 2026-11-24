@@ -25,4 +25,9 @@ def test_gallery_is_registered_in_admin():
     )
     assert model_admin.list_filter == ("status",)
     assert model_admin.search_fields == ("title", "slug")
-    assert model_admin.readonly_fields == ("created_at", "updated_at")
+    assert model_admin.readonly_fields == (
+        "status",
+        "published_at",
+        "created_at",
+        "updated_at",
+    )

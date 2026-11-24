@@ -1,14 +1,14 @@
 # Pixeo — Architecture cible
 
 > **Statut : référence validée ; fondations A4, authentification A5,
-> inscription A6 et modèle de galerie A7 réalisés.**
+> inscription A6, modèle de galerie A7 et API CRUD des galeries A8 réalisés.**
 > PostgreSQL, la migration initiale `accounts`, Django Admin, le health check
 > base, les endpoints d'authentification, l'inscription transactionnelle avec
-> initialisation du plan Free, du branding et de la homepage, ainsi que le
-> modèle `galleries.Gallery` sont en place. Les autres modèles et endpoints
-> métier seront ajoutés dans les lots suivants. Ce document décrit la cible
-> Django/DRF validée ; il ne remplace pas `DEVELOPMENT_PROGRESS.md`, qui suit
-> l'avancement réel.
+> initialisation du plan Free, du branding et de la homepage, le modèle
+> `galleries.Gallery` et l'API de gestion des galeries du photographe sont en
+> place. Les autres modèles et endpoints métier seront ajoutés dans les lots
+> suivants. Ce document décrit la cible Django/DRF validée ; il ne remplace pas
+> `DEVELOPMENT_PROGRESS.md`, qui suit l'avancement réel.
 
 ## 1. Vue d'ensemble
 
@@ -88,7 +88,7 @@ Règles :
 - Les permissions sont explicites et testées.
 - Les opérations sensibles utilisent `transaction.atomic()`.
 
-### Structure backend en place (A7)
+### Structure backend en place (A8)
 
 ```text
 backend/
@@ -139,10 +139,16 @@ backend/
 │   │       └── 0001_initial.py
 │   ├── galleries/
 │   │   ├── models.py         # Gallery, GalleryStatus
+│   │   ├── serializers.py    # GallerySerializer, validation d'écriture
+│   │   ├── views.py          # GalleryViewSet, isolation par request.user
 │   │   ├── admin.py
-│   │   └── migrations/
-│   │       ├── 0001_initial.py
-│   │       └── 0002_gallery_constraints.py
+│   │   ├── migrations/
+│   │   │   ├── 0001_initial.py
+│   │   │   └── 0002_gallery_constraints.py
+│   │   └── tests/
+│   │       ├── test_models.py
+│   │       ├── test_admin.py
+│   │       └── test_api.py
 │   └── api/
 │       ├── serializers.py    # PixeoSerializer, conversion camelCase
 │       ├── pagination.py     # page/page_size, enveloppe items/pageSize
@@ -199,8 +205,8 @@ Principes appliqués :
 - Le stockage local/S3-R2 est sélectionné par `STORAGE_BACKEND`, sans impact sur
   la logique métier.
 - L'API est versionnée par `URLPathVersioning` ; seule `v1` est autorisée. Le
-  routeur `apps.api.urls` monte les routes `/api/v1/auth/` et reste extensible
-  pour les futurs endpoints métier.
+  routeur `apps.api.urls` monte les routes `/api/v1/auth/` et
+  `/api/v1/galleries/`, et reste extensible pour les futurs endpoints métier.
 - Les réponses de succès utilisent `{"ok": true, "data": ...}` ; les erreurs
   utilisent `{"ok": false, "error", "code", "details"}` avec des codes stables.
 - La pagination accepte `page` et `page_size`, avec 20 éléments par défaut et
@@ -209,8 +215,19 @@ Principes appliqués :
   clés en camelCase, y compris pour les erreurs de validation.
 - Les permissions de base distinguent `IsPhotographer`, `IsPlatformAdmin` et les
   vues publiques explicites (`AllowAny`). Les permissions de rôle vérifient aussi
-  le statut courant du compte. L'isolation multi-tenant sera ajoutée dans les
-  lots métier.
+  le statut courant du compte. L'isolation multi-tenant des galeries est
+  appliquée par filtrage du queryset sur `request.user` dans `GalleryViewSet` ;
+  les autres lots métier devront appliquer le même principe.
+- L'API galeries expose `GET/POST /api/v1/galleries/` et
+  `GET/PATCH/DELETE /api/v1/galleries/{id}/`. `PATCH` est la seule méthode de
+  modification ; `DELETE` renvoie `204`. La liste est paginée et filtrable par
+  `status`. Le propriétaire est toujours `request.user` et les champs inconnus
+  sont refusés. Une galerie d'un autre photographe renvoie `404`.
+- Le CRUD galeries ne gère que `title`, `slug` et `description`. `status` et
+  `publishedAt` restent en lecture seule ; toute tentative d'écriture renvoie
+  `400 VALIDATION_ERROR`. Toute création commence en `draft` avec
+  `publishedAt=null`. Les transitions de publication restent réservées à un
+  futur service métier.
 - La documentation OpenAPI est exposée via `schema`, Swagger UI et ReDoc ; elle
   est publique en développement et réservée aux administrateurs en production.
   Les schémas de sécurité `jwtAuth` et `cookieAuth` sont documentés.
@@ -311,9 +328,12 @@ restent non démarrés.
 - `slug` : slug obligatoire, 100 caractères maximum.
 - `description` : texte facultatif, vide par défaut.
 - `status` : `draft`, `published`, `hidden` ou `pre_release`, avec `draft` par
-  défaut.
-- `published_at` : date facultative (nullable), renseignée ultérieurement par
-  la logique métier.
+  défaut. Le CRUD A8 ne modifie pas ce champ ; les transitions seront gérées
+  par un futur service de publication.
+- `published_at` : date de première publication, nullable. Elle reste `null`
+  avant la première publication, est renseignée par le futur service métier,
+  puis conservée après une dépublication ou un masquage. Le CRUD A8 ne peut
+  jamais la définir ni la modifier.
 - `created_at` et `updated_at` : dates automatiques.
 
 Contraintes :
@@ -324,13 +344,17 @@ Contraintes :
   vides, même via `save()`, `objects.create()` ou `bulk_create()` ;
 - contrainte SQL `CHECK` limitant `status` à `draft`, `published`, `hidden` et
   `pre_release` ;
+- contrainte SQL `CHECK` `gallery_published_requires_published_at` : une
+  galerie `published` doit avoir un `published_at` non nul ; une galerie non
+  publiée peut conserver une date de première publication ;
 - `Gallery.clean()` et `Gallery.save()` refusent un propriétaire qui n'a pas le
   rôle `photographer` ; cette règle inter-tables ne peut pas être exprimée par
   une simple contrainte SQL. Les créations de masse doivent passer par un
   service qui appelle `full_clean()` ;
 - aucune galerie n'est partagée entre plusieurs photographes ;
-- l'administration permet la liste, le filtre par statut, la recherche par titre
-  ou slug, et expose les dates en lecture seule.
+- l'administration permet la liste, le filtre par statut et la recherche par
+  titre ou slug ; `status`, `published_at`, `created_at` et `updated_at` y sont
+  en lecture seule afin de ne pas contourner le futur service de publication.
 
 Aucun serializer, endpoint, upload, mot de passe de galerie ou modèle `Photo`
 n'est ajouté en A7.
@@ -461,7 +485,7 @@ Abstraction via le backend de stockage Django :
 
 ## 7. API
 
-- Préfixe : `/api/<version>/`, avec `v1` comme seule version autorisée en A6.
+- Préfixe : `/api/<version>/`, avec `v1` comme seule version autorisée en A8.
 - Réponses de succès : `{"ok": true, "data": ...}`.
 - Erreurs uniformes : `{"ok": false, "error", "code", "details"}` ; codes
   stables, détails de validation conservés, aucune fuite interne.

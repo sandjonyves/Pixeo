@@ -8,6 +8,8 @@ chemins stables et documentés.
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
+from apps.galleries.views import GalleryViewSet
+
 from .views import PixeoAPIRootView
 
 
@@ -19,9 +21,7 @@ class PixeoRouter(DefaultRouter):
 
 
 router = PixeoRouter()
-
-# Les futurs ViewSets seront enregistrés ici :
-# router.register("galleries", GalleryViewSet, basename="gallery")
+router.register("galleries", GalleryViewSet, basename="gallery")
 
 urlpatterns = [
     path("auth/", include("apps.accounts.auth.urls")),

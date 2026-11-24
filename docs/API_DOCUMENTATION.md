@@ -1,6 +1,7 @@
 # Pixeo — Contrat API
 
-> **Statut : fondation API A4, authentification A5 et inscription A6.**
+> **Statut : fondation API A4, authentification A5, inscription A6, modèle de
+> galerie A7 et CRUD des galeries A8.**
 > Les endpoints techniques `health`, `schema`, `docs` et `redoc` sont implémentés,
 > ainsi que le versionnement `/api/v1/`, les enveloppes de réponse, la gestion
 > centralisée des erreurs, la pagination, les permissions de base et la conversion
@@ -8,9 +9,11 @@
 > rotation et sa révocation, le profil courant et la protection CSRF/CORS.
 > Le lot A6 ajoute l'inscription publique, la création transactionnelle du plan
 > Free, du branding et de la homepage initiale.
+> Le lot A7 ajoute le modèle `Gallery` et ses contraintes. Le lot A8 expose le
+> CRUD des galeries du photographe authentifié, avec isolation multi-tenant.
 > La migration initiale, PostgreSQL et Django Admin restent en place.
-> Les endpoints métier ci-dessous restent une cible : aucun endpoint de galerie,
-> de photo, d'abonnement payant ou de paiement n'est exposé.
+> Les autres endpoints métier ci-dessous restent une cible : aucun endpoint de
+> photo, d'abonnement payant ou de paiement n'est exposé.
 
 ## 1. Conventions générales
 
@@ -352,13 +355,109 @@ faire.
 
 > Le frontend appelle « collection » ce que l'API nomme « gallery ».
 
+### 4.1 CRUD implémenté en A8
+
+Toutes les routes exigent une authentification valide et la permission
+`IsPhotographer` : le compte doit être actif, non suspendu et avoir le rôle
+`photographer`. Un `platform_admin` reçoit `403 PERMISSION_DENIED`.
+
+| Méthode | Route | Succès | Description |
+|---------|-------|--------|-------------|
+| POST | `/api/v1/galleries/` | `201` | Créer une galerie pour `request.user` |
+| GET | `/api/v1/galleries/` | `200` | Lister uniquement les galeries de `request.user` |
+| GET | `/api/v1/galleries/{id}/` | `200` | Consulter une galerie du photographe |
+| PATCH | `/api/v1/galleries/{id}/` | `200` | Modifier partiellement une galerie du photographe |
+| DELETE | `/api/v1/galleries/{id}/` | `204` | Supprimer une galerie du photographe, sans corps |
+
+`PUT` n'est pas exposé : la modification se fait exclusivement avec `PATCH`.
+Le nombre de galeries n'est pas limité par le plan.
+
+#### Champs
+
+| Champ | Écriture | Règles |
+|-------|----------|--------|
+| `title` | Obligatoire | Chaîne non vide, 150 caractères maximum |
+| `slug` | Obligatoire | Format slug, 100 caractères maximum, unique pour le photographe |
+| `description` | Facultatif | Chaîne, vide par défaut |
+| `status` | Lecture seule | `draft`, `published`, `hidden` ou `pre_release`. Toute écriture est refusée |
+| `id` | Lecture seule | UUID |
+| `publishedAt` | Lecture seule | Date de première publication ; `null` avant la première publication |
+| `createdAt`, `updatedAt` | Lecture seule | Dates automatiques |
+
+Le CRUD A8 ne modifie jamais `status` ni `publishedAt`. Toute création
+commence en `draft` avec `publishedAt=null`. Fournir `status`, y compris
+`draft`, ou `publishedAt` dans `POST` ou `PATCH` renvoie
+`400 VALIDATION_ERROR` ; le champ n'est jamais ignoré silencieusement.
+
+Les transitions `published`, `hidden` et `pre_release` seront gérées par un
+futur service métier dédié, non implémenté en A8. `publishedAt` représente la
+date de première publication : elle sera renseignée lors de la première
+publication, puis conservée après une dépublication ou un masquage.
+
+Le propriétaire n'est jamais un champ accepté. `photographer`,
+`photographerId` et tout autre champ inconnu sont refusés avec
+`400 VALIDATION_ERROR`. Le propriétaire est toujours imposé depuis
+`request.user`.
+
+Exemple de galerie retournée :
+
+```json
+{
+  "ok": true,
+  "data": {
+    "id": "3f3f3f3f-3f3f-4f3f-8f3f-3f3f3f3f3f3f",
+    "title": "Mariage de Camille",
+    "slug": "mariage-camille",
+    "description": "Sélection des meilleurs moments.",
+    "status": "draft",
+    "publishedAt": null,
+    "createdAt": "2026-11-19T10:00:00Z",
+    "updatedAt": "2026-11-19T10:00:00Z"
+  }
+}
+```
+
+La réponse ne contient ni propriétaire, ni mot de passe, ni hash, ni donnée
+interne du compte.
+
+#### Liste, tri et filtrage
+
+- La liste est paginée avec `page` et `page_size` (20 par défaut, 100 maximum).
+- Le tri suit le modèle : `createdAt` décroissant.
+- `?status=published` filtre par statut. Le filtre s'applique toujours après
+  l'isolation par propriétaire.
+- Aucune galerie d'un autre photographe n'est retournée.
+
+#### Isolation multi-tenant et codes d'erreur
+
+Le queryset est filtré par `photographer=request.user` avant toute lecture,
+modification ou suppression. Une galerie appartenant à un autre photographe est
+traitée comme inexistante et renvoie `404 NOT_FOUND`, sans révéler son existence.
+
+| Situation | HTTP | Code |
+|-----------|------|------|
+| Aucun token ou aucune session | `401` | `AUTHENTICATION_REQUIRED` |
+| Rôle non photographe, compte inactif ou suspendu | `403` | `PERMISSION_DENIED`, `ACCOUNT_DISABLED` ou `ACCOUNT_SUSPENDED` |
+| Session Django sans jeton CSRF valide | `403` | `CSRF_FAILED` |
+| Titre/slug manquant ou vide, longueur dépassée, slug déjà utilisé par le même photographe, champ inconnu | `400` | `VALIDATION_ERROR` |
+| `status` ou `publishedAt` fourni en écriture, y compris `status=draft` | `400` | `VALIDATION_ERROR` |
+| Galerie inexistante, identifiant invalide ou galerie d'un autre photographe | `404` | `NOT_FOUND` |
+| Méthode `PUT` | `405` | `METHOD_NOT_ALLOWED` |
+| Type de contenu non pris en charge | `415` | `UNSUPPORTED_MEDIA_TYPE` |
+
+Un slug identique reste autorisé pour deux photographes différents. Seul le
+conflit d'unicité `unique_gallery_slug_per_photographer` est converti en
+`400 VALIDATION_ERROR` ; les autres erreurs d'intégrité renvoient
+`500 INTERNAL_ERROR` sans détail SQL et sont journalisées côté serveur.
+
+### 4.2 Cible V1 — non implémentée en A8
+
+Les routes suivantes restent une cible et ne sont pas exposées par A8. Le CRUD
+des galeries ne doit pas être utilisé comme substitut : une transition de
+statut reste réservée à ces futurs endpoints métier.
+
 | Méthode | Route | Description |
 |---------|-------|-------------|
-| GET | `/api/v1/galleries/` | Liste filtrée par tenant |
-| POST | `/api/v1/galleries/` | Créer (aucune limite de nombre) |
-| GET | `/api/v1/galleries/{id}/` | Détail |
-| PATCH | `/api/v1/galleries/{id}/` | Mise à jour |
-| DELETE | `/api/v1/galleries/{id}/` | Supprimer la collection (pas les photos) |
 | POST | `/api/v1/galleries/{id}/publish/` | Publier |
 | POST | `/api/v1/galleries/{id}/unpublish/` | Repasser en brouillon |
 | POST | `/api/v1/galleries/{id}/password/` | Définir le mot de passe (hashé) |
@@ -368,7 +467,7 @@ faire.
 | POST | `/api/v1/galleries/{id}/share-link/` | Créer/renouveler le lien pre-release |
 | GET | `/api/v1/galleries/{id}/activity/` | Journal d'activité |
 
-### Sets
+#### Sets
 
 | Méthode | Route | Description |
 |---------|-------|-------------|
@@ -376,7 +475,7 @@ faire.
 | PATCH/DELETE | `/api/v1/galleries/{id}/sets/{setId}/` | Modifier / supprimer |
 | PATCH | `/api/v1/galleries/{id}/sets/reorder/` | Réordonner |
 
-### Photos dans une collection
+#### Photos dans une collection
 
 | Méthode | Route | Description |
 |---------|-------|-------------|
@@ -470,13 +569,14 @@ Toutes les routes admin exigent `role = platform_admin` et sont auditées.
 | GET | `/api/v1/redoc/` | ReDoc |
 
 Le préfixe public est `/api/<version>/`. Seule la version `v1` est autorisée en
-A6 ; une version inconnue est rejetée avec l'enveloppe d'erreur standard. Le
+A8 ; une version inconnue est rejetée avec l'enveloppe d'erreur standard. Le
 endpoint de santé est conservé hors routeur pour préserver exactement son
 contrat historique.
 
 La documentation OpenAPI est librement accessible en développement. En
 production, elle est réservée aux administrateurs authentifiés via la session
-Django. Les routes métier ne sont pas documentées tant qu'elles n'existent pas.
+Django. Les routes métier documentées dans ce contrat sont celles réellement
+exposées ; les routes marquées « cible » restent à implémenter.
 
 Health check disponible (HTTP 200) :
 

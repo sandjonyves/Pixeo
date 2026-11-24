@@ -1,8 +1,8 @@
 # Pixeo — Développement backend
 
-> Dernière mise à jour : 2026-11-19
-> Lot en cours : **A7 — Création du modèle de données des galeries Pixeo**
-> (réalisé, validé)
+> Dernière mise à jour : 2026-11-24
+> Lot en cours : **A8 — correction de sécurité du CRUD des galeries**
+> (corrigé, en attente de validation)
 
 ## 1. Méthode de travail
 
@@ -29,6 +29,7 @@ n'est modifié par les lots backend avant la Phase E.
 | A | **A5** | Authentification JWT, cookie refresh, rotation/blacklist, CSRF/CORS, profil courant | **Réalisé — validé** |
 | A | **A6** | Inscription publique, plan Free, branding, homepage initiale | **Réalisé — validé** |
 | A | **A7** | Modèle `Gallery`, contrainte slug par photographe, admin et migration | **Réalisé — validé** |
+| A | **A8** | API REST CRUD des galeries, isolation multi-tenant, tests et documentation | **Corrigé — en attente de validation** |
 | B | — | Studio, branding, homepage, plans/abonnements | Partiellement préparé par A6 (modèles initiaux) |
 | C | — | Collections, photos, stockage, accès publics, favoris/notes | Non démarré |
 | D | — | Intégration frontend et retrait du `localStorage` | Non démarré |
@@ -360,9 +361,9 @@ n'est ajouté en A6.
 - Plan Free : 1 ligne active. Aucun abonnement, branding ou homepage persistants
   n'ont été créés par les tests.
 - Les migrations A1–A5 n'ont pas été modifiées.
-- A6 est validé et commité localement, sans push ; le worktree conserve les
-  8 modifications frontend préexistantes.
-- `origin/main` reste sur le commit A5 `d27e3f0`.
+- A6 est validé et commité (`bcd36ea`), puis poussé avec A7 ; le worktree
+  conserve les 8 modifications frontend préexistantes.
+- `origin/main` pointe sur le commit A7 `71dccd1`.
 
 ## 10. Lot A7 — modèle de données des galeries
 
@@ -395,8 +396,12 @@ de `apps.galleries` est ajouté aux settings.
 - `Gallery.slug` : `SlugField(max_length=100)`, non vide.
 - `Gallery.description` : `TextField` facultatif, vide par défaut.
 - `Gallery.status` : `draft`, `published`, `hidden` ou `pre_release`, avec
-  `draft` par défaut.
-- `Gallery.published_at` : `DateTimeField` nullable et facultatif.
+  `draft` par défaut. Le CRUD et l'administration le laissent en lecture seule ;
+  les transitions seront gérées par un futur service de publication.
+- `Gallery.published_at` : `DateTimeField` nullable. Il représente la date de
+  première publication, reste `null` avant celle-ci, puis est conservé après
+  une dépublication ou un masquage. Le CRUD et l'administration ne peuvent pas
+  le modifier.
 - `Gallery.created_at` et `Gallery.updated_at` : dates automatiques.
 - Contrainte `UniqueConstraint(fields=["photographer", "slug"])` nommée
   `unique_gallery_slug_per_photographer`.
@@ -405,10 +410,16 @@ de `apps.galleries` est ajouté aux settings.
   `save()`, `objects.create()` ou `bulk_create()`.
 - Contrainte SQL `CHECK` `gallery_status_valid` : seules les quatre valeurs
   autorisées peuvent être enregistrées.
+- Contrainte SQL `CHECK` `gallery_published_requires_published_at` : une
+  galerie `published` doit avoir un `published_at` non nul. Une galerie non
+  publiée peut conserver une date de première publication.
 - `Gallery.clean()` et `Gallery.save()` refusent un propriétaire dont le rôle
-  n'est pas `photographer`. Une contrainte SQL ne peut pas vérifier le rôle
-  d'une table liée ; les créations de masse doivent passer par un service qui
-  appelle `full_clean()`.
+  n'est pas `photographer`, ainsi qu'une galerie `published` sans
+  `published_at`. Une contrainte SQL ne peut pas vérifier le rôle d'une table
+  liée ; les créations de masse doivent passer par un service qui appelle
+  `full_clean()`.
+- `GalleryAdmin` expose `status`, `published_at`, `created_at` et `updated_at`
+  en lecture seule ; le titre, le slug et la description restent modifiables.
 - Ordre par défaut : `-created_at`.
 - La suppression du photographe supprime ses galeries.
 - L'admin affiche titre, photographe, slug, statut et date de création ; il
@@ -439,12 +450,121 @@ de `apps.galleries` est ajouté aux settings.
 - PostgreSQL local `pixeo` : compte `admin@pixeo.test` conservé, plan Free
   actif, aucune galerie persistante.
 - Les migrations A1–A6 n'ont pas été modifiées.
-- A7 est implémenté, vérifié et validé ; il est commité localement et non
-  poussé.
-- `origin/main` reste sur le commit A5 `d27e3f0`.
+- A7 est implémenté, vérifié et validé ; commit `71dccd1`, poussé sur
+  `origin/main`.
+- `origin/main` pointe sur `71dccd1`.
 - Les huit modifications frontend préexistantes restent intactes.
 
-## 11. Décisions structurantes
+## 11. Lot A8 — API REST de gestion des galeries
+
+### Livrables
+
+| Élément | Chemin | État |
+|---------|--------|------|
+| Serializer API | `backend/apps/galleries/serializers.py` | Créé |
+| Vue API | `backend/apps/galleries/views.py` | Créée |
+| Enregistrement du routeur | `backend/apps/api/urls.py` | `GalleryViewSet` enregistré |
+| Tests modèle et admin | `backend/apps/galleries/tests/test_models.py`, `test_admin.py` | 32 + 1 tests |
+| Tests API | `backend/apps/galleries/tests/test_api.py` | 70 tests |
+| Migration incrémentale | `backend/apps/galleries/migrations/0003_gallery_gallery_published_requires_published_at.py` | Contrainte de cohérence publication |
+| Schémas OpenAPI | `backend/apps/galleries/serializers.py`, `backend/config/settings/base.py` | Tag Galeries, schémas camelCase, `status` absent des requêtes |
+| Tests OpenAPI et racine API | `backend/apps/api/tests/test_documentation.py`, `backend/apps/api/tests/test_versioning.py` | Mis à jour |
+| Documentation | `docs/API_DOCUMENTATION.md`, `docs/ARCHITECTURE.md`, `docs/DEVELOPMENT_PROGRESS.md` | Mise à jour |
+
+A8 n'ajoute aucun modèle, upload, stockage, galerie publique, PIN, lien privé,
+token de prépublication, paiement, abonnement ou modification frontend.
+L'authentification A5, l'inscription A6, le modèle `Gallery` A7 et les
+migrations A1–A7 restent inchangés. La correction ajoute uniquement la migration
+incrémentale `galleries.0003` et le durcissement du CRUD.
+
+### Endpoints et règles
+
+- `POST /api/v1/galleries/` crée une galerie pour `request.user` et retourne
+  `201` avec l'enveloppe de succès. La galerie est toujours créée en `draft`
+  avec `publishedAt=null`.
+- `GET /api/v1/galleries/` retourne uniquement les galeries de `request.user`,
+  paginées et triées par `createdAt` décroissant.
+- `GET /api/v1/galleries/{id}/` retourne une galerie du photographe.
+- `PATCH /api/v1/galleries/{id}/` modifie partiellement `title`, `slug` et
+  `description`. `PUT` n'est pas exposé.
+- `DELETE /api/v1/galleries/{id}/` supprime une galerie du photographe et
+  retourne `204` sans corps.
+- `permission_classes = [IsPhotographer]` : compte actif, non suspendu, rôle
+  `photographer`. Un `platform_admin` reçoit `403`.
+- Le queryset de classe vaut `Gallery.objects.none()`. `get_queryset()` filtre
+  systématiquement par `photographer=request.user` pour toutes les actions. Une
+  galerie d'un autre photographe renvoie `404 NOT_FOUND`.
+- `perform_create()` impose `photographer=request.user`, `status=draft` et
+  `published_at=None`. Les champs `photographer`, `photographerId` et tout
+  autre champ inconnu sont refusés avec `400 VALIDATION_ERROR`.
+- Le serializer expose `id`, `title`, `slug`, `description`, `status`,
+  `publishedAt`, `createdAt` et `updatedAt`. `status`, `publishedAt`, `id`,
+  `createdAt` et `updatedAt` sont en lecture seule. Le propriétaire n'est jamais
+  exposé.
+- Fournir `status`, y compris `draft`, ou `publishedAt` dans `POST` ou `PATCH`
+  renvoie `400 VALIDATION_ERROR`. Ces champs ne sont jamais ignorés
+  silencieusement. Les transitions de statut seront réservées à un futur service
+  métier.
+- `title` et `slug` sont obligatoires et non vides ; `title` est limité à 150
+  caractères, `slug` à 100. `description` est facultative.
+- Le slug est unique par photographe ; le même slug reste autorisé pour deux
+  photographes différents. Un doublon est refusé en validation. Seul le conflit
+  d'unicité `unique_gallery_slug_per_photographer` est converti en
+  `400 VALIDATION_ERROR` ; les autres erreurs d'intégrité sont journalisées et
+  remontent en `500 INTERNAL_ERROR` générique, sans détail SQL.
+- La liste accepte `page`, `page_size` et `?status=`. Le filtre de statut
+  s'applique après l'isolation par propriétaire.
+- Les erreurs utilisent l'enveloppe standard : `400 VALIDATION_ERROR`,
+  `401 AUTHENTICATION_REQUIRED`, `403 PERMISSION_DENIED` /
+  `CSRF_FAILED` / `ACCOUNT_DISABLED` / `ACCOUNT_SUSPENDED`, `404 NOT_FOUND`,
+  `405 METHOD_NOT_ALLOWED` et `415 UNSUPPORTED_MEDIA_TYPE`.
+- Une session Django est acceptée en plus du JWT. Une requête d'écriture sans
+  jeton CSRF valide renvoie `403 CSRF_FAILED` ; CSRF n'est jamais désactivé.
+
+### Vérifications réellement exécutées
+
+| Vérification | Résultat |
+|--------------|----------|
+| `pytest -q apps/galleries` | **103 passed** (32 modèle + 1 admin + 70 API) |
+| `pytest -q` PostgreSQL (`--no-migrations`) | **381 passed** |
+| `pytest -q -o addopts='' --create-db` avec migrations PostgreSQL | **381 passed** |
+| `DATABASE_URL='sqlite:///:memory:' pytest -q` | **381 passed** |
+| `DATABASE_URL='sqlite:///:memory:' pytest -q -o addopts='' --create-db` | **381 passed** |
+| `python manage.py check` | `System check identified no issues (0 silenced).` |
+| `python manage.py makemigrations --check --dry-run` | `No changes detected` |
+| `python manage.py spectacular --validate` | Schéma OpenAPI valide, aucune erreur ni avertissement |
+| `python -m pip check` | `No broken requirements found.` |
+| `git diff --check` | Aucun problème |
+| Migration PostgreSQL `galleries.0003` | Appliquée ; contrainte `gallery_published_requires_published_at` présente |
+| Migration SQLite avec données | Appliquée sur une base temporaire ; galerie conservée à l'identique |
+| Tests d'authentification | Anonyme `401`, admin plateforme `403`, suspendu `403`, inactif `403` |
+| Tests d'isolation | Liste, détail, `PATCH` et `DELETE` d'un autre photographe → `404` |
+| Tests de création | Propriétaire `request.user`, injections refusées, `status`/`publishedAt` refusés, défauts, doublons et longueurs |
+| Tests de transition | Toutes les valeurs de `status` refusées en `POST` et `PATCH`, depuis `draft`, `hidden` et `published` |
+| Tests CSRF | Session sans jeton → `403 CSRF_FAILED` ; avec jeton → `POST`/`PATCH`/`DELETE` réussis |
+| Tests `IntegrityError` | Conflit de slug → `400` ; autre erreur → `500` générique journalisée, sans SQL |
+| Tests de liste | Pagination, filtre `status`, tri et total |
+| Tests de validation | Enveloppe standard, champs inconnus, identifiant et propriétaire non modifiables |
+| OpenAPI | Routes, paramètre `status`, schémas camelCase, `status` absent des requêtes, réponses `201` et `204` |
+| Avertissements | 198, tous causés par `backend/staticfiles/` absent ; aucun échec |
+
+### État de la base et Git
+
+- PostgreSQL local `pixeo` : compte `admin@pixeo.test` conservé, plan Free
+  actif, aucune galerie persistante. Les compteurs utilisateurs, administrateur
+  et plans sont inchangés après migration.
+- Les migrations A1–A7 n'ont pas été modifiées. A8 ajoute uniquement la
+  migration incrémentale `galleries.0003_gallery_gallery_published_requires_published_at`.
+- La migration a été appliquée après vérification : aucune galerie
+  `published` sans `published_at` n'existait. Aucune donnée n'a été corrigée
+  silencieusement.
+- A8 est corrigé et vérifié dans le worktree, sans staging, commit, push,
+  changement de branche, rebase ni reset.
+- `HEAD` et `origin/main` pointent sur `71dccd1`.
+- Les huit fichiers frontend protégés restent inchangés ; le hash du diff est
+  `718a59ec6e47702024c7c4820b94b02f4c094788c1910e2563897966e56fd116`.
+
+## 12. Décisions structurantes
 
 - Nom officiel : **Pixeo**. Aucune référence à SimpleShoot.
 - Tenant = `accounts.User` via `branding_username` ; pas de modèle `Tenant`.
@@ -458,7 +578,7 @@ de `apps.galleries` est ajouté aux settings.
 - Stockage abstrait local/S3-R2.
 - Aucun faux succès : `not_configured` ou endpoint désactivé si non configuré.
 - Python en `snake_case`, API en `camelCase`.
-- L'API est versionnée par URL (`/api/v1/`) ; seule `v1` est autorisée en A6.
+- L'API est versionnée par URL (`/api/v1/`) ; seule `v1` est autorisée en A8.
 - Les erreurs utilisent des codes stables en majuscules et une enveloppe unique.
 - La pagination expose 20 éléments par défaut, 100 maximum et `pageSize`.
 - Les permissions de base sont `IsPhotographer` et `IsPlatformAdmin` ; les vues
@@ -497,8 +617,35 @@ de `apps.galleries` est ajouté aux settings.
   `/api/v1/auth/login/`.
 - Le modèle A7 `Gallery` utilise le statut `pre_release` (underscore), un slug
   unique par photographe et une suppression en cascade avec le photographe.
+- L'API A8 expose le CRUD des galeries sous `/api/v1/galleries/`. Le propriétaire
+  est toujours `request.user`; aucun champ `photographer` ou `photographerId`
+  fourni par le client n'est accepté. `PATCH` est la seule méthode de
+  modification et `DELETE` retourne `204`.
+- Le CRUD ne gère que `title`, `slug` et `description`. `status` et
+  `publishedAt` sont en lecture seule : toute tentative d'écriture renvoie
+  `400 VALIDATION_ERROR`, y compris `status=draft` ou `publishedAt=null`.
+- Toute création commence en `draft` avec `publishedAt=null`. Les transitions
+  de statut seront implémentées dans un futur service métier dédié.
+- `publishedAt` représente la date de première publication. Il reste `null`
+  avant la première publication, est renseigné par le futur service lors de
+  cette première publication, puis conservé après une dépublication ou un
+  masquage. Une prépublication ne le renseigne pas.
+- Toute lecture, modification ou suppression de galerie est filtrée par
+  `photographer=request.user`. Une galerie d'un autre photographe renvoie `404`
+  pour ne pas révéler son existence.
+- Le slug est unique par photographe. Un doublon est refusé en validation ; un
+  conflit d'insertion concurrent sur `unique_gallery_slug_per_photographer` est
+  converti en erreur API sans exposer l'exception SQL. Les autres erreurs
+  d'intégrité remontent en `500 INTERNAL_ERROR` générique et sont journalisées.
+- La liste des galeries est paginée, triée par `createdAt` décroissant et
+  filtrable par `status`. Le filtre s'applique après l'isolation par
+  propriétaire.
+- A8 ajoute une migration incrémentale `galleries.0003` pour garantir au niveau
+  SQL qu'une galerie `published` possède un `published_at` non nul.
+- Les échecs CSRF des sessions Django sont normalisés en `403 CSRF_FAILED`
+  pour tous les endpoints concernés ; CSRF reste actif.
 
-## 12. Problèmes rencontrés et points d'attention
+## 13. Problèmes rencontrés et points d'attention
 
 ### Problèmes résolus pendant A1
 
@@ -622,10 +769,48 @@ de `apps.galleries` est ajouté aux settings.
   `save()`/`objects.create()` et les contraintes réellement appliquées par la
   base.
 
+### Problèmes résolus pendant A8
+
+- L'ajout de la route galeries modifie la racine `/api/v1/` : le test A4 qui
+  attendait une enveloppe vide a été mis à jour pour vérifier la découverte de
+  `/api/v1/galleries/`.
+- Le schéma OpenAPI généré depuis le `ModelSerializer` exposait les noms
+  internes `published_at`, `created_at` et `updated_at`. Des schémas publics
+  camelCase dédiés documentent désormais la requête et la réponse, comme pour
+  l'inscription A6.
+- La validation du slug couvre le doublon ordinaire. Une course entre la
+  validation et l'insertion sur `unique_gallery_slug_per_photographer` est
+  convertie en `400 VALIDATION_ERROR` via `IntegrityError`, dans une
+  transaction, sans exposer SQL ni contrainte.
+- Les autres `IntegrityError` ne sont plus masquées en erreurs de validation :
+  elles sont journalisées et remontent en `500 INTERNAL_ERROR` générique, sans
+  détail SQL.
+- Un identifiant de galerie mal formé pouvait remonter comme erreur Django. La
+  vue convertit `ValidationError`/`ValueError` en `404 NOT_FOUND` standard.
+- DRF ignore par défaut les champs inconnus et les champs `read_only`. Le
+  serializer refuse explicitement les champs inconnus, `photographer`,
+  `photographerId`, `status`, `publishedAt`, `id`, `createdAt` et `updatedAt`.
+  Fournir `status` ou `publishedAt` renvoie donc `400 VALIDATION_ERROR` au lieu
+  d'être ignoré.
+- Le CRUD ne pouvait pas garantir la cohérence du cycle de vie : `status` et
+  `publishedAt` étaient modifiables. Ils sont désormais en lecture seule dans
+  l'API et dans l'administration. La création force `draft`/`null` et les
+  transitions sont réservées à un futur service métier.
+- Le modèle et la base refusent une galerie `published` sans `published_at`.
+  La contrainte SQL `gallery_published_requires_published_at` protège aussi les
+  écritures de masse et les mises à jour directes.
+- Le queryset de classe est désormais `Gallery.objects.none()` ; toutes les
+  actions passent par `get_queryset()` filtré par photographe.
+- Les échecs CSRF d'une session Django renvoyaient `PERMISSION_DENIED` au lieu
+  de `CSRF_FAILED`. Le gestionnaire d'erreurs les normalise sans désactiver
+  CSRF.
+- `PUT` est désactivé au niveau de la vue ; seule la modification partielle
+  `PATCH` est disponible.
+
 ### Points d'attention
 
 - **Travail frontend antérieur non commité** : 8 fichiers modifiés (limites de
-  galeries) ont été laissés intacts pendant A1 à A7. Ils devront être commités
+  galeries) ont été laissés intacts pendant A1 à A8. Ils devront être commités
   séparément après validation.
 - Le superutilisateur créé pour la validation A3 est local ; son mot de passe
   n'est pas versionné. Il devra être remplacé par un compte de production créé
@@ -639,18 +824,19 @@ de `apps.galleries` est ajouté aux settings.
 - Les dépendances de test (pytest, pytest-django) sont maintenant dans
   `backend/requirements-dev.txt`.
 
-## 13. Prochain lot
+## 14. Prochain lot
 
 **Lot suivant — non démarré.**
 
-- A6 est commité localement (`bcd36ea`) ; A7 est implémenté, vérifié et
-  commité localement, sans push.
-- Aucun lot suivant (photos, collections, abonnements payants, e-mails réels)
-  n'est démarré.
-- `origin/main` pointe sur le commit A5 `d27e3f0`.
-- A7 a été commité localement après validation, sans push.
+- A6 (`bcd36ea`) et A7 (`71dccd1`) sont commités et poussés sur `origin/main`.
+- A8 est corrigé et vérifié dans le worktree, sans commit ni push ; il attend
+  une validation explicite. La migration `galleries.0003` est appliquée sur la
+  base PostgreSQL locale.
+- Aucun lot suivant (photos, sets, upload, galeries publiques, PIN, liens privés,
+  abonnements payants, e-mails réels) n'est démarré.
+- `origin/main` pointe sur `71dccd1`.
 
-## 14. Commandes utiles
+## 15. Commandes utiles
 
 ```bash
 # Backend
@@ -681,11 +867,21 @@ DATABASE_URL='sqlite:///:memory:' pytest -q
 # API technique
 curl -i http://localhost:8000/api/v1/health/
 curl -s http://localhost:8000/api/v1/schema/?format=json | head
+python manage.py spectacular --validate
 
 # Inscription (JSON-only, sans session)
 curl -i -X POST http://localhost:8000/api/v1/auth/register/ \
   -H 'Content-Type: application/json' \
   -d '{"email":"photographe@example.com","password":"MotDePasseSolide123!","passwordConfirmation":"MotDePasseSolide123!","brandingUsername":"studio-photo"}'
+
+# Galeries (access token photographe requis)
+curl -i http://localhost:8000/api/v1/galleries/ \
+  -H 'Authorization: Bearer <accessToken>'
+curl -i -X POST http://localhost:8000/api/v1/galleries/ \
+  -H 'Authorization: Bearer <accessToken>' \
+  -H 'Content-Type: application/json' \
+  -d '{"title":"Mariage de Camille","slug":"mariage-camille"}'
+# status et publishedAt sont refusés en écriture ; la galerie est créée en draft.
 # Swagger UI : http://localhost:8000/api/v1/docs/
 # ReDoc     : http://localhost:8000/api/v1/redoc/
 

@@ -70,16 +70,25 @@ class Gallery(models.Model):
                 condition=models.Q(status__in=GalleryStatus.values),
                 name="gallery_status_valid",
             ),
+            models.CheckConstraint(
+                condition=(
+                    ~models.Q(status=GalleryStatus.PUBLISHED)
+                    | models.Q(published_at__isnull=False)
+                ),
+                name="gallery_published_requires_published_at",
+            ),
         ]
 
     def clean(self):
         """Valide les règles inter-tables du modèle."""
         super().clean()
         self._validate_photographer_role()
+        self._validate_publication_consistency()
 
     def save(self, *args, **kwargs):
-        """Applique la règle de rôle aux écritures ORM directes."""
+        """Applique les règles métier aux écritures ORM directes."""
         self._validate_photographer_role()
+        self._validate_publication_consistency()
         super().save(*args, **kwargs)
 
     def _validate_photographer_role(self):
@@ -104,6 +113,26 @@ class Gallery(models.Model):
                 {
                     "photographer": _(
                         "Une galerie doit appartenir à un photographe."
+                    )
+                }
+            )
+
+    def _validate_publication_consistency(self):
+        """Garantit qu'une galerie publiée possède une date de publication.
+
+        ``published_at`` représente la date de première publication. Elle peut
+        donc rester renseignée après une dépublication ou un masquage.
+        """
+
+        if (
+            self.status == GalleryStatus.PUBLISHED
+            and self.published_at is None
+        ):
+            raise ValidationError(
+                {
+                    "published_at": _(
+                        "Une galerie publiée doit avoir une date de première "
+                        "publication."
                     )
                 }
             )

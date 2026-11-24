@@ -24,7 +24,10 @@ def test_api_root_is_versioned_and_uses_success_envelope():
     response = Client().get("/api/v1/", HTTP_HOST="localhost")
 
     assert response.status_code == 200
-    assert response.json() == {"ok": True, "data": {}}
+    payload = response.json()
+    assert payload["ok"] is True
+    assert set(payload["data"]) == {"galleries"}
+    assert payload["data"]["galleries"].endswith("/api/v1/galleries/")
 
 
 def test_unsupported_api_version_is_rejected():

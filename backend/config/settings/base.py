@@ -298,6 +298,12 @@ SPECTACULAR_SETTINGS = {
                 "Connexion, renouvellement, déconnexion, profil et jeton CSRF."
             ),
         },
+        {
+            "name": "Galeries",
+            "description": (
+                "Gestion des galeries du photographe authentifié."
+            ),
+        },
     ],
     # La documentation est publique en développement (override dans
     # development.py) et réservée aux administrateurs en production.

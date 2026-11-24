@@ -303,6 +303,110 @@ def test_gallery_date_fields(gallery):
     assert gallery.updated_at >= previous_updated_at
 
 
+def test_gallery_rejects_published_without_published_at(photographer):
+    gallery = Gallery(
+        photographer=photographer,
+        title="Galerie publiée",
+        slug="galerie-publiee",
+        status=GalleryStatus.PUBLISHED,
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        gallery.full_clean()
+
+    assert "published_at" in exc_info.value.message_dict
+
+
+def test_gallery_save_rejects_published_without_published_at(photographer):
+    gallery = Gallery(
+        photographer=photographer,
+        title="Galerie publiée",
+        slug="galerie-publiee",
+        status=GalleryStatus.PUBLISHED,
+    )
+
+    with pytest.raises(ValidationError) as exc_info:
+        gallery.save()
+
+    assert "published_at" in exc_info.value.message_dict
+
+
+def test_gallery_objects_create_rejects_published_without_published_at(
+    photographer,
+):
+    with pytest.raises(ValidationError) as exc_info:
+        Gallery.objects.create(
+            photographer=photographer,
+            title="Galerie publiée",
+            slug="galerie-publiee",
+            status=GalleryStatus.PUBLISHED,
+        )
+
+    assert "published_at" in exc_info.value.message_dict
+
+
+def test_gallery_bulk_create_rejects_published_without_published_at(
+    photographer,
+):
+    with pytest.raises(IntegrityError):
+        with transaction.atomic():
+            Gallery.objects.bulk_create(
+                [
+                    Gallery(
+                        photographer=photographer,
+                        title="Galerie publiée",
+                        slug="galerie-publiee",
+                        status=GalleryStatus.PUBLISHED,
+                    )
+                ]
+            )
+
+
+def test_gallery_published_with_published_at_is_allowed(photographer):
+    published_at = timezone.now()
+    gallery = Gallery.objects.create(
+        photographer=photographer,
+        title="Galerie publiée",
+        slug="galerie-publiee",
+        status=GalleryStatus.PUBLISHED,
+        published_at=published_at,
+    )
+
+    assert gallery.status == GalleryStatus.PUBLISHED
+    assert gallery.published_at == published_at
+
+
+@pytest.mark.parametrize(
+    "gallery_status",
+    [
+        GalleryStatus.DRAFT,
+        GalleryStatus.HIDDEN,
+        GalleryStatus.PRE_RELEASE,
+    ],
+)
+def test_non_published_gallery_can_keep_published_at(
+    photographer,
+    gallery_status,
+):
+    published_at = timezone.now()
+    gallery = Gallery.objects.create(
+        photographer=photographer,
+        title="Galerie déjà publiée",
+        slug=f"galerie-{gallery_status}",
+        status=gallery_status,
+        published_at=published_at,
+    )
+
+    assert gallery.status == gallery_status
+    assert gallery.published_at == published_at
+
+
+def test_gallery_has_publication_consistency_constraint():
+    names = {constraint.name for constraint in Gallery._meta.constraints}
+
+    assert "gallery_published_requires_published_at" in names
+
+
 def test_gallery_field_lengths_and_status_choices():
     assert Gallery._meta.get_field("title").max_length == 150
     assert Gallery._meta.get_field("slug").max_length == 100

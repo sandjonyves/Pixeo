@@ -135,6 +135,13 @@ def _error_payload(exc: Exception, response: Response) -> dict[str, Any]:
             "AUTHENTICATION_FAILED",
             "Identifiants invalides.",
         )
+    elif (
+        isinstance(exc, exceptions.PermissionDenied)
+        and str(getattr(exc, "detail", "")).startswith("CSRF Failed")
+    ):
+        # DRF SessionAuthentication ne porte pas de code dédié pour un échec
+        # CSRF. On aligne ces refus sur le code Pixeo stable des vues A5/A6.
+        code, message = _PIXEO_ERRORS["csrf_failed"]
     elif isinstance(
         exc,
         (exceptions.PermissionDenied, DjangoPermissionDenied),

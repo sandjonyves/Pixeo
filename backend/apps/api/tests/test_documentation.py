@@ -17,7 +17,8 @@ def test_openapi_schema_is_accessible_and_versioned():
     assert schema["info"]["title"] == "Pixeo API"
     assert "camelCase" in schema["info"]["description"]
     assert "/api/v1/" in schema["paths"]
-    assert "/api/v1/galleries/" not in schema["paths"]
+    assert "/api/v1/galleries/" in schema["paths"]
+    assert "/api/v1/galleries/{id}/" in schema["paths"]
 
 
 def test_openapi_documents_auth_endpoints_and_security_schemes():
@@ -80,6 +81,74 @@ def test_openapi_documents_auth_endpoints_and_security_schemes():
         "passwordConfirmation",
         "brandingUsername",
     }
+
+
+def test_openapi_documents_gallery_endpoints():
+    response = Client().get(
+        "/api/v1/schema/?format=json",
+        HTTP_HOST="localhost",
+    )
+
+    assert response.status_code == 200
+    schema = response.json()
+
+    list_operation = schema["paths"]["/api/v1/galleries/"]["get"]
+    create_operation = schema["paths"]["/api/v1/galleries/"]["post"]
+    detail_operations = schema["paths"]["/api/v1/galleries/{id}/"]
+    assert set(detail_operations) >= {"get", "patch", "delete"}
+
+    assert "Galeries" in list_operation["tags"]
+    assert "status" in {
+        parameter["name"]
+        for parameter in list_operation.get("parameters", [])
+    }
+    assert list_operation["responses"]["200"]["content"][
+        "application/json"
+    ]["schema"]["$ref"].endswith("PaginatedGallerySchemaList")
+
+    request_ref = create_operation["requestBody"]["content"][
+        "application/json"
+    ]["schema"]["$ref"].rsplit("/", 1)[-1]
+    request_schema = schema["components"]["schemas"][request_ref]
+    assert set(request_schema["properties"]) == {
+        "title",
+        "slug",
+        "description",
+    }
+    assert set(request_schema["required"]) == {"title", "slug"}
+    assert "photographer" not in request_schema["properties"]
+    assert "status" not in request_schema["properties"]
+    assert "publishedAt" not in request_schema["properties"]
+
+    patch_operation = detail_operations["patch"]
+    patch_ref = patch_operation["requestBody"]["content"]["application/json"][
+        "schema"
+    ]["$ref"].rsplit("/", 1)[-1]
+    patch_schema = schema["components"]["schemas"][patch_ref]
+    assert set(patch_schema["properties"]) == {
+        "title",
+        "slug",
+        "description",
+    }
+    assert "required" not in patch_schema
+
+    response_ref = create_operation["responses"]["201"]["content"][
+        "application/json"
+    ]["schema"]["$ref"].rsplit("/", 1)[-1]
+    response_schema = schema["components"]["schemas"][response_ref]
+    data_ref = response_schema["properties"]["data"]["$ref"].rsplit("/", 1)[-1]
+    gallery_schema = schema["components"]["schemas"][data_ref]
+    assert set(gallery_schema["properties"]) == {
+        "id",
+        "title",
+        "slug",
+        "description",
+        "status",
+        "publishedAt",
+        "createdAt",
+        "updatedAt",
+    }
+    assert "204" in detail_operations["delete"]["responses"]
 
 
 def test_swagger_ui_is_accessible_in_development():

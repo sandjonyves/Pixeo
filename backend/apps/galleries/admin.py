@@ -13,5 +13,10 @@ class GalleryAdmin(admin.ModelAdmin):
     list_filter = ("status",)
     search_fields = ("title", "slug")
     ordering = ("-created_at",)
-    readonly_fields = ("created_at", "updated_at")
+    readonly_fields = (
+        "status",
+        "published_at",
+        "created_at",
+        "updated_at",
+    )
     autocomplete_fields = ("photographer",)
