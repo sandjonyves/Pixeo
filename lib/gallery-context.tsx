@@ -12,7 +12,6 @@ import {
 import { STOCK_PHOTOS, createSeedState, formatBytes, slugify, uid } from '@/lib/seed'
 import {
   DEFAULT_PLANS,
-  effectiveGalleryLimit,
   getPlan,
   type PlanDefinition,
   type PlanId,
@@ -58,7 +57,6 @@ type GalleryContextValue = {
     role: 'photographer' | 'platform_admin'
     planId?: PlanId
   }) => { ok: boolean; error?: string; account?: UserAccount }
-  canCreateGallery: () => LimitCheck
   canUploadBytes: (bytes: number) => LimitCheck
   createCollection: (input?: { name?: string; eventDate?: string }) => Collection
   updateCollection: (id: string, patch: Partial<Collection>) => void
@@ -131,7 +129,14 @@ function loadState(): AppState {
       homepage: { ...seed.homepage, ...parsed.homepage },
       branding: { ...seed.branding, ...parsed.branding },
       accounts: parsed.accounts?.length ? parsed.accounts : seed.accounts,
-      plans: parsed.plans?.length ? parsed.plans : seed.plans,
+      plans: (parsed.plans?.length ? parsed.plans : seed.plans).map((plan) => ({
+        ...plan,
+        // Collections are unlimited on every plan. Migrate older persisted
+        // plans that still advertised a numeric gallery quota.
+        features: plan.features.map((feature) =>
+          /^\d+\s+galleries?$/i.test(feature) ? 'Unlimited galleries' : feature,
+        ),
+      })),
       billingHistory: parsed.billingHistory ?? seed.billingHistory,
       collections: (parsed.collections ?? seed.collections).map((c) => ({
         ...seed.collections[0],
@@ -408,16 +413,6 @@ export function GalleryProvider({ children }: { children: ReactNode }) {
       return { ok: true, account }
     }
 
-    const canCreateGallery = (): LimitCheck => {
-      if (!state.user) return { ok: false, error: 'Sign in to create galleries.' }
-      const plan = getPlan(state.user.planId, state.plans)
-      const limit = effectiveGalleryLimit(plan)
-      if (state.collections.length >= limit) {
-        return { ok: false, error: `Gallery limit reached (${limit}). Upgrade your plan.` }
-      }
-      return { ok: true }
-    }
-
     const canUploadBytes = (bytes: number): LimitCheck => {
       if (usedStorageBytes + bytes > state.storageLimitBytes) {
         return { ok: false, error: 'Storage limit exceeded. Upgrade your plan.' }
@@ -439,7 +434,6 @@ export function GalleryProvider({ children }: { children: ReactNode }) {
       updatePlans,
       updateAccount,
       createPlatformAccount,
-      canCreateGallery,
       canUploadBytes,
       updateUser: (patch) =>
         commit((prev) => {

@@ -3,13 +3,7 @@
 import Link from 'next/link'
 import { AppButton } from '@/components/app-button'
 import { useGallery } from '@/lib/gallery-context'
-import {
-  DEFAULT_PLANS,
-  effectiveGalleryLimit,
-  formatFcfa,
-  getPlan,
-  type PlanId,
-} from '@/lib/plans'
+import { DEFAULT_PLANS, formatFcfa, getPlan, type PlanId } from '@/lib/plans'
 import { formatBytes } from '@/lib/seed'
 import { useToast } from '@/components/toast-provider'
 
@@ -19,10 +13,8 @@ export function BillingScreen() {
   const plans = state.plans?.length ? state.plans : DEFAULT_PLANS
   const planId = state.user?.planId ?? 'free'
   const currentPlan = getPlan(planId, plans)
-  const galleryLimit = effectiveGalleryLimit(currentPlan)
   const galleryCount = state.collections.length
   const storagePct = Math.min(100, Math.round((usedStorageBytes / state.storageLimitBytes) * 100))
-  const galleryPct = Math.min(100, Math.round((galleryCount / galleryLimit) * 100))
 
   const upgrade = (targetId: PlanId) => {
     if (targetId === planId) return
@@ -64,12 +56,8 @@ export function BillingScreen() {
 
         <section className="billing-card">
           <h2>Galleries</h2>
-          <div className="gauge-bar">
-            <span style={{ width: `${galleryPct}%` }} />
-          </div>
-          <p>
-            {galleryCount} of {currentPlan.galleryLimit === null ? `${galleryLimit}+` : galleryLimit} galleries
-          </p>
+          <p>{galleryCount} collections</p>
+          <p className="muted">Unlimited collections on every plan.</p>
         </section>
       </div>
 

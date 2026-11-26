@@ -7,7 +7,6 @@ import { ChevronDown, Search, Star } from 'lucide-react'
 import { AppButton } from '@/components/app-button'
 import { ConfirmDialog, Modal } from '@/components/modal'
 import { EmptyState } from '@/components/empty-state'
-import { UpgradeModal } from '@/components/upgrade-modal'
 import { useGallery } from '@/lib/gallery-context'
 import { formatDateLabel } from '@/lib/seed'
 import { useToast } from '@/components/toast-provider'
@@ -18,15 +17,13 @@ const STATUS_OPTIONS: CollectionStatus[] = ['published', 'pre-release', 'hidden'
 export function CollectionsScreen() {
   const router = useRouter()
   const { notify } = useToast()
-  const { state, createCollection, getCoverSrc, deleteCollection, toggleCollectionStar, canCreateGallery } =
+  const { state, createCollection, getCoverSrc, deleteCollection, toggleCollectionStar } =
     useGallery()
   const [query, setQuery] = useState('')
   const [filter, setFilter] = useState<string | null>(null)
   const [statusFilter, setStatusFilter] = useState<CollectionStatus | null>(null)
   const [starredOnly, setStarredOnly] = useState(false)
   const [createOpen, setCreateOpen] = useState(false)
-  const [upgradeOpen, setUpgradeOpen] = useState(false)
-  const [upgradeMessage, setUpgradeMessage] = useState('')
   const [name, setName] = useState('')
   const [eventDate, setEventDate] = useState('')
   const [creating, setCreating] = useState(false)
@@ -46,12 +43,6 @@ export function CollectionsScreen() {
       notify('Collection name is required.', 'error')
       return
     }
-    const limit = canCreateGallery()
-    if (!limit.ok) {
-      setUpgradeMessage(limit.error || 'Upgrade required')
-      setUpgradeOpen(true)
-      return
-    }
     setCreating(true)
     await new Promise((r) => setTimeout(r, 350))
     const collection = createCollection({ name, eventDate: eventDate || undefined })
@@ -64,12 +55,6 @@ export function CollectionsScreen() {
   }
 
   const openCreate = () => {
-    const limit = canCreateGallery()
-    if (!limit.ok) {
-      setUpgradeMessage(limit.error || 'Upgrade required')
-      setUpgradeOpen(true)
-      return
-    }
     setCreateOpen(true)
   }
 
@@ -260,15 +245,6 @@ export function CollectionsScreen() {
           }
           setDeleteId(null)
         }}
-      />
-
-      <UpgradeModal
-        open={upgradeOpen}
-        onClose={() => setUpgradeOpen(false)}
-        title="Upgrade required"
-        message={upgradeMessage}
-        ctaHref="/billing"
-        ctaLabel="View billing"
       />
     </>
   )

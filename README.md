@@ -56,7 +56,7 @@ Ouvre [http://localhost:3000](http://localhost:3000).
 - [ ] Sidebar : Collections, Library, Starred, Homepage, Settings, Billing (pas de Marketing)
 - [ ] Créer / éditer collection, upload photos
 - [ ] Publier galerie, copier lien `/c/[slug]`
-- [ ] Billing : plan actuel, jauges storage/galleries, upgrade mock
+- [ ] Billing : plan actuel, jauge storage, compteur galleries, upgrade mock
 - [ ] Account : nom du plan + lien billing
 
 ### Galeries publiques

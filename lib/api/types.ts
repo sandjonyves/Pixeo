@@ -55,7 +55,6 @@ export type ApiPlan = {
   name: string
   priceMonthlyFcfa: number
   storageLimitBytes: number
-  galleryLimit: number | null
   features: string[]
   active: boolean
   sortOrder: number

@@ -5,9 +5,6 @@ export type PlanDefinition = {
   name: string
   priceMonthlyFcfa: number
   storageLimitBytes: number
-  /** null = soft unlimited (cap for safety) */
-  galleryLimit: number | null
-  softGalleryCap: number
   features: string[]
   highlighted?: boolean
 }
@@ -20,11 +17,9 @@ export const DEFAULT_PLANS: PlanDefinition[] = [
     name: 'Free',
     priceMonthlyFcfa: 0,
     storageLimitBytes: 5 * GB,
-    galleryLimit: 2,
-    softGalleryCap: 2,
     features: [
       '5 Go storage',
-      '2 galleries',
+      'Unlimited galleries',
       'Private client link',
       'Password protection',
       'Pixeo watermark',
@@ -35,11 +30,9 @@ export const DEFAULT_PLANS: PlanDefinition[] = [
     name: 'Starter',
     priceMonthlyFcfa: 2000,
     storageLimitBytes: 50 * GB,
-    galleryLimit: 10,
-    softGalleryCap: 10,
     features: [
       '50 Go storage',
-      '10 galleries',
+      'Unlimited galleries',
       'HD downloads',
       'Password protection',
       'No watermark',
@@ -50,8 +43,6 @@ export const DEFAULT_PLANS: PlanDefinition[] = [
     name: 'Pro',
     priceMonthlyFcfa: 5000,
     storageLimitBytes: 250 * GB,
-    galleryLimit: null,
-    softGalleryCap: 200,
     highlighted: true,
     features: [
       '250 Go storage',
@@ -66,8 +57,6 @@ export const DEFAULT_PLANS: PlanDefinition[] = [
     name: 'Studio',
     priceMonthlyFcfa: 10000,
     storageLimitBytes: 1024 * GB,
-    galleryLimit: null,
-    softGalleryCap: 500,
     features: [
       '1 To storage',
       'Unlimited galleries',
@@ -85,8 +74,4 @@ export function getPlan(id: PlanId, plans: PlanDefinition[] = DEFAULT_PLANS) {
 export function formatFcfa(amount: number) {
   if (amount === 0) return 'Gratuit'
   return `${amount.toLocaleString('fr-FR')} FCFA/mois`
-}
-
-export function effectiveGalleryLimit(plan: PlanDefinition) {
-  return plan.galleryLimit ?? plan.softGalleryCap
 }

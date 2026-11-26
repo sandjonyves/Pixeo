@@ -31,14 +31,13 @@ export function AdminPlansScreen() {
   return (
     <>
       <h1>Plans</h1>
-      <p className="page-lead">Edit storage limits, gallery caps, and monthly pricing.</p>
+      <p className="page-lead">Edit storage limits and monthly pricing. Collections are unlimited on every plan.</p>
 
       <table className="data-table">
         <thead>
           <tr>
             <th>Plan</th>
             <th>Storage (GB)</th>
-            <th>Gallery limit</th>
             <th>Price (FCFA/mo)</th>
           </tr>
         </thead>
@@ -59,21 +58,6 @@ export function AdminPlansScreen() {
                       storageLimitBytes: Math.max(1, Number(e.target.value)) * GB,
                     })
                   }
-                />
-              </td>
-              <td>
-                <input
-                  type="number"
-                  min={1}
-                  placeholder="∞"
-                  value={plan.galleryLimit ?? ''}
-                  onChange={(e) => {
-                    const val = e.target.value
-                    updateDraft(plan.id, {
-                      galleryLimit: val === '' ? null : Math.max(1, Number(val)),
-                      softGalleryCap: val === '' ? plan.softGalleryCap : Math.max(1, Number(val)),
-                    })
-                  }}
                 />
               </td>
               <td>

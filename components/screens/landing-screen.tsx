@@ -61,7 +61,7 @@ export function LandingScreen() {
         </article>
         <article>
           <h3>Grow on your terms</h3>
-          <p>Start free, upgrade when you need more storage or unlimited galleries.</p>
+          <p>Start free with unlimited galleries, and upgrade when you need more storage.</p>
         </article>
         <article>
           <h3>Built for West Africa</h3>
