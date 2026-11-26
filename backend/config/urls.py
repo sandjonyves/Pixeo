@@ -1,5 +1,7 @@
 """Routes racine de Pixeo."""
 
+from django.conf import settings
+from django.conf.urls.static import static
 from django.contrib import admin
 from django.urls import include, path
 from drf_spectacular.views import (
@@ -32,3 +34,12 @@ urlpatterns = [
         include(("apps.api.urls", "api"), namespace="api"),
     ),
 ]
+
+# En développement uniquement, Django sert les fichiers importés depuis
+# MEDIA_ROOT. En production, le reverse proxy ou le stockage S3/R2 sert les
+# médias ; Django ne doit pas les exposer directement.
+if settings.DEBUG:
+    urlpatterns += static(
+        settings.MEDIA_URL,
+        document_root=settings.MEDIA_ROOT,
+    )

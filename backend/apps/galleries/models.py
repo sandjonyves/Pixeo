@@ -8,6 +8,7 @@ même slug sans collision.
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 
 from django.conf import settings
 from django.core.exceptions import ObjectDoesNotExist, ValidationError
@@ -15,6 +16,20 @@ from django.db import models
 from django.utils.translation import gettext_lazy as _
 
 from apps.accounts.models import UserRole
+
+# Formats réellement décodés par Pillow et acceptés par l'import A9. Le format
+# est détecté depuis le contenu, jamais depuis l'extension fournie par le client.
+PHOTO_ALLOWED_FORMATS = ("JPEG", "PNG", "WEBP")
+PHOTO_FORMAT_EXTENSIONS = {
+    "JPEG": ".jpg",
+    "PNG": ".png",
+    "WEBP": ".webp",
+}
+PHOTO_FORMAT_MIME_TYPES = {
+    "JPEG": "image/jpeg",
+    "PNG": "image/png",
+    "WEBP": "image/webp",
+}
 
 
 class GalleryStatus(models.TextChoices):
@@ -139,3 +154,91 @@ class Gallery(models.Model):
 
     def __str__(self) -> str:
         return self.title
+
+
+def photo_upload_path(instance: "Photo", filename: str) -> str:
+    """Construit une clé de stockage stable et non devinable.
+
+    L'extension est choisie par le service après validation du contenu. En cas
+    d'écriture directe hors service, l'extension du nom fourni est conservée si
+    elle fait partie des formats autorisés, sinon ``.img`` est utilisé. Le nom
+    d'origine n'est jamais utilisé comme chemin.
+    """
+
+    detected_extension = getattr(instance, "_storage_extension", None)
+    if detected_extension in PHOTO_FORMAT_EXTENSIONS.values():
+        extension = detected_extension
+    else:
+        suffix = Path(filename).suffix.lower()
+        extension = (
+            suffix
+            if suffix in PHOTO_FORMAT_EXTENSIONS.values()
+            else ".img"
+        )
+
+    return f"galleries/{instance.gallery_id}/photos/{uuid.uuid4().hex}{extension}"
+
+
+class Photo(models.Model):
+    """Photo importée dans une galerie Pixeo.
+
+    La photo appartient à la galerie, donc au photographe propriétaire de cette
+    galerie. Aucun champ propriétaire dupliqué n'est exposé : l'isolation est
+    appliquée via ``gallery__photographer``.
+    """
+
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    gallery = models.ForeignKey(
+        Gallery,
+        on_delete=models.CASCADE,
+        related_name="photos",
+        verbose_name=_("gallery"),
+    )
+    file = models.ImageField(
+        _("file"),
+        upload_to=photo_upload_path,
+        max_length=500,
+    )
+    original_filename = models.CharField(
+        _("original filename"),
+        max_length=255,
+    )
+    format = models.CharField(_("format"), max_length=20)
+    mime_type = models.CharField(_("MIME type"), max_length=100)
+    size_bytes = models.PositiveBigIntegerField(_("size (bytes)"))
+    width = models.PositiveIntegerField(_("width"))
+    height = models.PositiveIntegerField(_("height"))
+    checksum_sha256 = models.CharField(_("SHA-256 checksum"), max_length=64)
+    position = models.PositiveIntegerField(_("position"), default=0)
+    created_at = models.DateTimeField(_("created at"), auto_now_add=True)
+    updated_at = models.DateTimeField(_("updated at"), auto_now=True)
+
+    class Meta:
+        verbose_name = _("photo")
+        verbose_name_plural = _("photos")
+        ordering = ["position", "created_at"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["gallery", "position"],
+                name="unique_photo_position_per_gallery",
+            ),
+            models.CheckConstraint(
+                condition=~models.Q(original_filename=""),
+                name="photo_original_filename_not_empty",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(format__in=PHOTO_ALLOWED_FORMATS),
+                name="photo_format_valid",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(width__gt=0) & models.Q(height__gt=0),
+                name="photo_dimensions_positive",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(size_bytes__gt=0),
+                name="photo_size_positive",
+            ),
+        ]
+
+    def __str__(self) -> str:
+        return self.original_filename or str(self.pk)

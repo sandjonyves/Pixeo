@@ -19,12 +19,26 @@ from rest_framework.response import Response
 from apps.api.pagination import PixeoPageNumberPagination
 from apps.api.permissions import IsPhotographer
 
-from .models import Gallery, GalleryStatus
+from .models import Gallery, GalleryStatus, Photo
 from .serializers import (
     GalleryRequestSchema,
     GalleryResponseSchema,
     GallerySchema,
     GallerySerializer,
+    PhotoBatchResponseSchema,
+    PhotoEnvelopeSchema,
+    PhotoReorderRequestSchema,
+    PhotoReorderSerializer,
+    PhotoSchema,
+    PhotoSerializer,
+    PhotoUploadRequestSchema,
+    PhotoUploadSerializer,
+)
+from .services import (
+    PhotoValidationError,
+    delete_photo,
+    import_photos,
+    reorder_photos,
 )
 
 logger = logging.getLogger("pixeo.galleries")
@@ -218,3 +232,184 @@ class GalleryViewSet(viewsets.ModelViewSet):
         serializer.is_valid(raise_exception=True)
         self.perform_update(serializer)
         return Response({"ok": True, "data": serializer.data})
+
+
+@extend_schema_view(
+    list=extend_schema(
+        tags=["Photos"],
+        responses=PhotoSchema(many=True),
+        description=(
+            "Liste paginée des photos d'une galerie du photographe "
+            "authentifié, triées par position."
+        ),
+    ),
+    create=extend_schema(
+        tags=["Photos"],
+        request=PhotoUploadRequestSchema,
+        responses={201: PhotoBatchResponseSchema},
+        description=(
+            "Importe une ou plusieurs photos dans une galerie du photographe. "
+            "Le corps est multipart avec le champ répétable `files` ou le "
+            "champ unique `file`. Les fichiers sont validés avant toute "
+            "écriture ; un lot invalide ne crée aucune photo."
+        ),
+    ),
+    retrieve=extend_schema(
+        tags=["Photos"],
+        responses=PhotoEnvelopeSchema,
+        description=(
+            "Retourne les métadonnées d'une photo d'une galerie du "
+            "photographe authentifié. Une photo d'un autre photographe ou "
+            "d'une autre galerie renvoie 404."
+        ),
+    ),
+    destroy=extend_schema(
+        tags=["Photos"],
+        responses={204: None},
+        description=(
+            "Supprime une photo de la galerie et son fichier stocké. Les "
+            "positions restantes sont compactées."
+        ),
+    ),
+)
+class GalleryPhotoViewSet(viewsets.GenericViewSet):
+    """Import, lecture, suppression et ordre des photos d'une galerie.
+
+    Le queryset est toujours filtré par ``gallery__photographer=request.user``
+    et par l'identifiant de galerie du chemin. Une galerie ou une photo d'un
+    autre photographe est traitée comme inexistante.
+    """
+
+    queryset = Photo.objects.none()
+    serializer_class = PhotoSerializer
+    permission_classes = [IsPhotographer]
+    pagination_class = PixeoPageNumberPagination
+    lookup_field = "id"
+    lookup_url_kwarg = "photo_id"
+    filter_backends: list = []
+    http_method_names = [
+        "get",
+        "post",
+        "patch",
+        "delete",
+        "head",
+        "options",
+    ]
+
+    def get_gallery(self) -> Gallery:
+        """Retourne la galerie du photographe ou lève un 404 standard."""
+
+        try:
+            return Gallery.objects.get(
+                pk=self.kwargs.get("gallery_id"),
+                photographer=self.request.user,
+            )
+        except (
+            Gallery.DoesNotExist,
+            DjangoValidationError,
+            ValueError,
+        ) as exc:
+            raise NotFound() from exc
+
+    def get_queryset(self):
+        return Photo.objects.filter(
+            gallery__photographer=self.request.user,
+            gallery_id=self.kwargs.get("gallery_id"),
+        ).select_related("gallery")
+
+    def list(self, request, *args, **kwargs):
+        self.get_gallery()
+        queryset = self.get_queryset()
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(
+            {
+                "ok": True,
+                "data": {
+                    "items": serializer.data,
+                    "total": queryset.count(),
+                },
+            }
+        )
+
+    def create(self, request, *args, **kwargs):
+        gallery = self.get_gallery()
+        upload_serializer = PhotoUploadSerializer(data=request.data)
+        upload_serializer.is_valid(raise_exception=True)
+
+        try:
+            photos = import_photos(
+                gallery,
+                upload_serializer.validated_data["files"],
+            )
+        except PhotoValidationError as exc:
+            raise ValidationError(exc.details) from exc
+        except Gallery.DoesNotExist as exc:
+            raise NotFound() from exc
+
+        serializer = self.get_serializer(photos, many=True)
+        return Response(
+            {
+                "ok": True,
+                "data": {
+                    "items": serializer.data,
+                    "total": len(photos),
+                },
+            },
+            status=status.HTTP_201_CREATED,
+        )
+
+    def retrieve(self, request, *args, **kwargs):
+        photo = self.get_object()
+        serializer = self.get_serializer(photo)
+        return Response({"ok": True, "data": serializer.data})
+
+    def destroy(self, request, *args, **kwargs):
+        photo = self.get_object()
+        try:
+            delete_photo(photo)
+        except Gallery.DoesNotExist as exc:
+            raise NotFound() from exc
+
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @extend_schema(
+        tags=["Photos"],
+        request=PhotoReorderRequestSchema,
+        responses={200: PhotoBatchResponseSchema},
+        description=(
+            "Réordonne toutes les photos d'une galerie. Le corps contient "
+            "`photoIds`, la liste complète des identifiants dans le nouvel "
+            "ordre. Une liste partielle, un doublon ou une photo étrangère "
+            "renvoie 400."
+        ),
+    )
+    def reorder(self, request, *args, **kwargs):
+        gallery = self.get_gallery()
+        serializer = PhotoReorderSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        try:
+            photos = reorder_photos(
+                gallery,
+                serializer.validated_data["photo_ids"],
+            )
+        except PhotoValidationError as exc:
+            raise ValidationError(exc.details) from exc
+        except Gallery.DoesNotExist as exc:
+            raise NotFound() from exc
+
+        output = self.get_serializer(photos, many=True)
+        return Response(
+            {
+                "ok": True,
+                "data": {
+                    "items": output.data,
+                    "total": len(photos),
+                },
+            }
+        )

@@ -1,8 +1,8 @@
 # Pixeo — Développement backend
 
-> Dernière mise à jour : 2026-11-24
-> Lot en cours : **A8 — correction de sécurité du CRUD des galeries**
-> (corrigé, en attente de validation)
+> Dernière mise à jour : 2026-11-26
+> Lot en cours : **A9 — import, lecture, suppression et ordre des photos**
+> (réalisé, commité et poussé)
 
 ## 1. Méthode de travail
 
@@ -29,7 +29,8 @@ n'est modifié par les lots backend avant la Phase E.
 | A | **A5** | Authentification JWT, cookie refresh, rotation/blacklist, CSRF/CORS, profil courant | **Réalisé — validé** |
 | A | **A6** | Inscription publique, plan Free, branding, homepage initiale | **Réalisé — validé** |
 | A | **A7** | Modèle `Gallery`, contrainte slug par photographe, admin et migration | **Réalisé — validé** |
-| A | **A8** | API REST CRUD des galeries, isolation multi-tenant, tests et documentation | **Corrigé — en attente de validation** |
+| A | **A8** | API REST CRUD des galeries, isolation multi-tenant, tests et documentation | **Réalisé — commité (`ec99da8`)** |
+| A | **A9** | Modèle `Photo`, import multipart validé par Pillow, lecture, suppression, réorganisation | **Réalisé — commité et poussé** |
 | B | — | Studio, branding, homepage, plans/abonnements | Partiellement préparé par A6 (modèles initiaux) |
 | C | — | Collections, photos, stockage, accès publics, favoris/notes | Non démarré |
 | D | — | Intégration frontend et retrait du `localStorage` | Non démarré |
@@ -564,6 +565,55 @@ incrémentale `galleries.0003` et le durcissement du CRUD.
 - Les huit fichiers frontend protégés restent inchangés ; le hash du diff est
   `718a59ec6e47702024c7c4820b94b02f4c094788c1910e2563897966e56fd116`.
 
+## 11 bis. Lot A9 — import et ordre des photos
+
+### Livrables
+
+| Élément | Chemin | État |
+|---------|--------|------|
+| Modèle `Photo` | `backend/apps/galleries/models.py` | Créé (UUID, FK `gallery`, métadonnées, SHA-256, position) |
+| Migration | `backend/apps/galleries/migrations/0004_photo.py` | Créée et appliquée sur PostgreSQL local |
+| Services métier | `backend/apps/galleries/services.py` | Créés (validation, import atomique, suppression, compaction, réorganisation) |
+| Serializers / vues | `backend/apps/galleries/serializers.py`, `views.py` | `GalleryPhotoViewSet` |
+| Routes | `backend/apps/api/urls.py` | `galleries/{id}/photos/`, `.../order/`, `.../{photoId}/` |
+| Médias en développement | `backend/config/urls.py` | `MEDIA_URL` servi uniquement si `DEBUG` |
+| Limites | `backend/config/settings/base.py`, `backend/.env.example` | `PIXEO_PHOTO_MAX_UPLOAD_SIZE`, `_MAX_BATCH_SIZE`, `_MAX_PIXELS` |
+| Admin | `backend/apps/galleries/admin.py` | Photos consultables et supprimables, sans ajout ni édition |
+| Tests | `backend/apps/galleries/tests/test_photo_api.py` | Créés |
+
+### Règles
+
+- Le format est détecté depuis le contenu (Pillow) : JPEG, PNG, WEBP. L'extension
+  et le Content-Type client ne sont jamais utilisés pour décider.
+- Protection contre les bombes de décompression, fichiers vides, tronqués ou
+  trop grands. Un lot invalide n'écrit rien (ni base ni stockage).
+- La clé de stockage est `galleries/{galleryId}/photos/{uuid}.{ext}` ; le nom
+  d'origine n'est jamais utilisé comme chemin.
+- Suppression : ligne supprimée et positions compactées dans une transaction ;
+  le fichier est effacé après commit uniquement.
+- Réorganisation : la liste complète des identifiants est exigée.
+- Isolation : toute photo ou galerie d'un autre photographe renvoie 404.
+- Décision V1 : **une photo appartient à une seule galerie**. La bibliothèque
+  partagée entre collections est reportée en V1.1.
+
+### Vérifications réellement exécutées
+
+| Vérification | Résultat |
+|--------------|----------|
+| `pytest -q` | **421 passed** |
+| `makemigrations --check --dry-run` | `No changes detected` |
+| `spectacular --validate --fail-on-warn` | OK |
+| `manage.py check` | `System check identified no issues (0 silenced).` |
+| `migrate galleries` (PostgreSQL local) | `0004_photo` appliquée |
+
+### Problèmes résolus pendant A9
+
+- `test_import_rejects_unsupported_format` : l'aide de test `_mime_type` ne
+  connaissait pas `GIF` (`KeyError`). Ajout de `image/gif`.
+- `test_delete_rollback_keeps_database_row_and_file` : `Model.delete()` remet
+  `pk` à `None` en mémoire même en cas de rollback ; le test capture désormais
+  l'identifiant avant la suppression. Le comportement du service était correct.
+
 ## 12. Décisions structurantes
 
 - Nom officiel : **Pixeo**. Aucune référence à SimpleShoot.
@@ -824,17 +874,31 @@ incrémentale `galleries.0003` et le durcissement du CRUD.
 - Les dépendances de test (pytest, pytest-django) sont maintenant dans
   `backend/requirements-dev.txt`.
 
-## 14. Prochain lot
+## 14. Plan de finition de la V1
 
-**Lot suivant — non démarré.**
+Ordre des lots restants (un commit et un push par lot) :
 
-- A6 (`bcd36ea`) et A7 (`71dccd1`) sont commités et poussés sur `origin/main`.
-- A8 est corrigé et vérifié dans le worktree, sans commit ni push ; il attend
-  une validation explicite. La migration `galleries.0003` est appliquée sur la
-  base PostgreSQL locale.
-- Aucun lot suivant (photos, sets, upload, galeries publiques, PIN, liens privés,
-  abonnements payants, e-mails réels) n'est démarré.
-- `origin/main` pointe sur `71dccd1`.
+| Phase | Lot | Contenu |
+|-------|-----|---------|
+| A | A10 | Clôture du socle : décision stockage et modèle de photo actée |
+| C | C1 | Stockage objet S3-compatible (Cloudflare R2 recommandé), bucket privé, URLs signées |
+| C | C2 | Quota de stockage du plan vérifié à l'import, usage exposé dans le profil |
+| C | C3 | Miniatures et aperçus WebP générés par Celery |
+| C | C4 | Publication / dépublication, photo de couverture |
+| C | C5 | Accès public : homepage et galerie publiées |
+| C | C6 | Téléchargement autorisé (URL signée, rate limiting) |
+| C | C7 | Mot de passe de galerie (hashé, `unlock`, rate limiting) |
+| B | B1–B4 | Plans publics, branding et filigrane, reset mot de passe et e-mails, changement de plan manuel par l'admin |
+| D | D1–D7 | Client API frontend, auth réelle, collections, upload réel, galeries publiques, billing, retrait du `localStorage` |
+| E | E1–E6 | Dockerfile, hébergement, domaine/TLS, CI, Sentry, pages légales, bêta fermée |
+
+Reporté en V1.1 : bibliothèque partagée, sets, favoris/notes clients, PIN et
+code client, liens pre-release, contacts et campagnes, paiement en ligne,
+sous-domaines par photographe.
+
+**Stockage** : TeraBox a été évalué et écarté comme stockage principal (aucune
+API officielle pour applications tierces, risque de suspension et de rupture).
+Le stockage cible reste S3-compatible, configurable via `STORAGE_BACKEND`.
 
 ## 15. Commandes utiles
 

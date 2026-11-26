@@ -475,14 +475,23 @@ statut reste réservée à ces futurs endpoints métier.
 | PATCH/DELETE | `/api/v1/galleries/{id}/sets/{setId}/` | Modifier / supprimer |
 | PATCH | `/api/v1/galleries/{id}/sets/reorder/` | Réordonner |
 
-#### Photos dans une collection
+#### Photos d'une galerie — implémenté en A9
+
+En V1, une photo appartient à une seule galerie. Toutes les routes exigent un
+photographe authentifié propriétaire de la galerie (sinon 404).
 
 | Méthode | Route | Description |
 |---------|-------|-------------|
-| GET | `/api/v1/galleries/{id}/photos/` | Photos rattachées |
-| POST | `/api/v1/galleries/{id}/photos/` | Rattacher des photos de la bibliothèque |
-| DELETE | `/api/v1/galleries/{id}/photos/{photoId}/` | Détacher (ne supprime pas le fichier) |
-| PATCH | `/api/v1/galleries/{id}/photos/reorder/` | Réordonner |
+| GET | `/api/v1/galleries/{id}/photos/` | Liste paginée, triée par position |
+| POST | `/api/v1/galleries/{id}/photos/` | Import multipart (`files` répétable ou `file`), lot atomique, 201 |
+| GET | `/api/v1/galleries/{id}/photos/{photoId}/` | Métadonnées d'une photo |
+| DELETE | `/api/v1/galleries/{id}/photos/{photoId}/` | Supprime la photo et son fichier, compacte les positions, 204 |
+| PATCH | `/api/v1/galleries/{id}/photos/order/` | Corps `{"photoIds": [...]}` : liste complète dans le nouvel ordre |
+
+Formats acceptés : JPEG, PNG, WEBP (détectés depuis le contenu). Limites
+configurables : `PIXEO_PHOTO_MAX_UPLOAD_SIZE` (20 Mio), `PIXEO_PHOTO_MAX_BATCH_SIZE`
+(20), `PIXEO_PHOTO_MAX_PIXELS` (50 Mpx). Erreur de validation : 400 avec
+`details.files`.
 
 ## 5. Bibliothèque de photos
 

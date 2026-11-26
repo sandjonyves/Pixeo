@@ -5,15 +5,17 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
+from django.conf import settings
 from rest_framework import serializers
 
 from apps.api.serializers import (
     PixeoModelSerializer,
+    PixeoSerializer,
     snakeize_keys,
     to_camel_case,
 )
 
-from .models import Gallery, GalleryStatus
+from .models import Gallery, GalleryStatus, Photo
 
 
 class GallerySerializer(PixeoModelSerializer):
@@ -130,3 +132,172 @@ class GalleryResponseSchema(serializers.Serializer):
 
     ok = serializers.BooleanField()
     data = GallerySchema()
+
+
+class StrictPixeoSerializer(PixeoSerializer):
+    """Serializer Pixeo qui refuse explicitement les champs inconnus."""
+
+    def to_internal_value(self, data: Any) -> Any:
+        if isinstance(data, Mapping):
+            normalized = snakeize_keys(data)
+            unknown = set(normalized) - set(self.fields)
+            if unknown:
+                raise serializers.ValidationError(
+                    {
+                        to_camel_case(str(field)): [
+                            "Ce champ n'est pas autorisé."
+                        ]
+                        for field in sorted(unknown)
+                    }
+                )
+            return super().to_internal_value(normalized)
+
+        return super().to_internal_value(data)
+
+
+class PhotoSerializer(PixeoModelSerializer):
+    """Représentation publique d'une photo et de ses métadonnées."""
+
+    url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Photo
+        fields = (
+            "id",
+            "gallery_id",
+            "original_filename",
+            "format",
+            "mime_type",
+            "size_bytes",
+            "width",
+            "height",
+            "position",
+            "url",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = fields
+
+    def get_url(self, obj: Photo) -> str | None:
+        """Retourne l'URL du fichier sans exposer la clé de stockage brute."""
+
+        if not obj.file:
+            return None
+
+        try:
+            file_url = obj.file.url
+        except (AttributeError, ValueError):
+            return None
+
+        request = self.context.get("request")
+        if request is not None:
+            return request.build_absolute_uri(file_url)
+        return file_url
+
+
+class PhotoUploadSerializer(StrictPixeoSerializer):
+    """Corps multipart d'import d'une ou plusieurs photos."""
+
+    files = serializers.ListField(
+        child=serializers.FileField(),
+        required=False,
+        allow_empty=False,
+    )
+    file = serializers.FileField(required=False)
+
+    def validate(self, attrs: dict[str, Any]) -> dict[str, Any]:
+        files = list(attrs.get("files") or [])
+        single_file = attrs.get("file")
+        if single_file is not None:
+            files.insert(0, single_file)
+
+        if not files:
+            raise serializers.ValidationError(
+                {"files": ["Au moins un fichier est requis."]}
+            )
+
+        max_batch_size = max(
+            1,
+            int(getattr(settings, "PIXEO_PHOTO_MAX_BATCH_SIZE", 1)),
+        )
+        if len(files) > max_batch_size:
+            raise serializers.ValidationError(
+                {
+                    "files": [
+                        (
+                            "Le nombre maximal de fichiers par requête est "
+                            f"de {max_batch_size}."
+                        )
+                    ]
+                }
+            )
+
+        attrs["files"] = files
+        attrs.pop("file", None)
+        return attrs
+
+
+class PhotoReorderSerializer(StrictPixeoSerializer):
+    """Corps de réorganisation complète des photos d'une galerie."""
+
+    photo_ids = serializers.ListField(
+        child=serializers.UUIDField(),
+        allow_empty=True,
+    )
+
+
+class PhotoSchema(serializers.Serializer):
+    """Schéma OpenAPI de la représentation publique d'une photo."""
+
+    id = serializers.UUIDField()
+    galleryId = serializers.UUIDField()
+    originalFilename = serializers.CharField()
+    format = serializers.CharField()
+    mimeType = serializers.CharField()
+    sizeBytes = serializers.IntegerField()
+    width = serializers.IntegerField()
+    height = serializers.IntegerField()
+    position = serializers.IntegerField()
+    url = serializers.URLField(allow_null=True)
+    createdAt = serializers.DateTimeField()
+    updatedAt = serializers.DateTimeField()
+
+
+class PhotoEnvelopeSchema(serializers.Serializer):
+    """Schéma OpenAPI de l'enveloppe d'une photo."""
+
+    ok = serializers.BooleanField()
+    data = PhotoSchema()
+
+
+class PhotoBatchDataSchema(serializers.Serializer):
+    """Données d'un import ou d'une réorganisation de plusieurs photos."""
+
+    items = PhotoSchema(many=True)
+    total = serializers.IntegerField()
+
+
+class PhotoBatchResponseSchema(serializers.Serializer):
+    """Enveloppe de succès d'un import ou d'une réorganisation."""
+
+    ok = serializers.BooleanField()
+    data = PhotoBatchDataSchema()
+
+
+class PhotoUploadRequestSchema(serializers.Serializer):
+    """Schéma OpenAPI du corps multipart d'import."""
+
+    files = serializers.ListField(
+        child=serializers.FileField(),
+        required=False,
+    )
+    file = serializers.FileField(required=False)
+
+
+class PhotoReorderRequestSchema(serializers.Serializer):
+    """Schéma OpenAPI du corps de réorganisation."""
+
+    photoIds = serializers.ListField(
+        child=serializers.UUIDField(),
+        allow_empty=True,
+    )

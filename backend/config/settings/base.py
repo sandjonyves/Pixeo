@@ -159,6 +159,19 @@ if STORAGE_BACKEND == "s3":
         },
     }
 
+# ─── Import des photos ────────────────────────────────────────────────────────
+# Les limites sont vérifiées côté serveur avant toute écriture en base ou en
+# stockage. Le format est détecté depuis le contenu avec Pillow.
+PIXEO_PHOTO_MAX_UPLOAD_SIZE = env.int(
+    "PIXEO_PHOTO_MAX_UPLOAD_SIZE", default=20 * 1024 * 1024
+)
+PIXEO_PHOTO_MAX_BATCH_SIZE = env.int(
+    "PIXEO_PHOTO_MAX_BATCH_SIZE", default=20
+)
+PIXEO_PHOTO_MAX_PIXELS = env.int(
+    "PIXEO_PHOTO_MAX_PIXELS", default=50_000_000
+)
+
 # ─── CORS et CSRF ─────────────────────────────────────────────────────────────
 # CORS et CSRF sont deux mécanismes distincts : CORS autorise les lectures
 # cross-origin, CSRF protège les écritures. Aucun wildcard global n'est activé.
@@ -302,6 +315,13 @@ SPECTACULAR_SETTINGS = {
             "name": "Galeries",
             "description": (
                 "Gestion des galeries du photographe authentifié."
+            ),
+        },
+        {
+            "name": "Photos",
+            "description": (
+                "Import, consultation, suppression et ordre des photos "
+                "d'une galerie du photographe authentifié."
             ),
         },
     ],
